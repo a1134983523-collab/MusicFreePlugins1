@@ -1,284 +1,1475 @@
-const axios = require('axios');
+"use strict";
 
-/*
- * MusicFree
- * 外部歌单导入 V1
+Object.defineProperty(exports, "__esModule", {
+    value: true
+});
+
+const axios_1 = require("axios");
+const cheerio_1 = require("cheerio");
+const CryptoJS = require("crypto-js");
+const dayjs = require("dayjs");
+
+const pageSize = 20;
+
+const headers = {
+    "user-agent":
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+};
+
+
+/* =========================================================
+ * Audiomack 原代码
+ * ========================================================= */
+
+function nonce(e = 10) {
+    let n =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+        r = "";
+
+    for (let i = 0; i < e; i++)
+        r += n.charAt(
+            Math.floor(
+                Math.random() * n.length
+            )
+        );
+
+    return r;
+}
+
+function getNormalizedParams(parameters) {
+    const sortedKeys = [];
+    const normalizedParameters = [];
+
+    for (let e in parameters) {
+        sortedKeys.push(_encode(e));
+    }
+
+    sortedKeys.sort();
+
+    for (
+        let idx = 0;
+        idx < sortedKeys.length;
+        idx++
+    ) {
+        const e = sortedKeys[idx];
+
+        var n,
+            r,
+            i = _decode(e),
+            a = parameters[i];
+
+        for (
+            a.sort(),
+            n = 0;
+            n < a.length;
+            n++
+        )
+            (r = _encode(a[n])),
+                normalizedParameters.push(
+                    e + "=" + r
+                );
+    }
+
+    return normalizedParameters.join("&");
+}
+
+function _encode(e) {
+    return e
+        ? encodeURIComponent(e)
+            .replace(/[!'()]/g, escape)
+            .replace(/\*/g, "%2A")
+        : "";
+}
+
+function _decode(e) {
+    return e ? decodeURIComponent(e) : "";
+}
+
+function u(e) {
+    (this._parameters = {}),
+        this._loadParameters(e || {});
+}
+
+u.prototype = {
+    _loadParameters: function (e) {
+        e instanceof Array
+            ? this._loadParametersFromArray(e)
+            : "object" == typeof e &&
+              this._loadParametersFromObject(e);
+    },
+
+    _loadParametersFromArray: function (e) {
+        var n;
+
+        for (
+            n = 0;
+            n < e.length;
+            n++
+        )
+            this._loadParametersFromObject(
+                e[n]
+            );
+    },
+
+    _loadParametersFromObject: function (e) {
+        var n;
+
+        for (n in e)
+            if (e.hasOwnProperty(n)) {
+                var r =
+                    this._getStringFromParameter(
+                        e[n]
+                    );
+
+                this._loadParameterValue(
+                    n,
+                    r
+                );
+            }
+    },
+
+    _loadParameterValue: function (e, n) {
+        var r;
+
+        if (n instanceof Array) {
+
+            for (
+                r = 0;
+                r < n.length;
+                r++
+            ) {
+
+                var i =
+                    this._getStringFromParameter(
+                        n[r]
+                    );
+
+                this._addParameter(
+                    e,
+                    i
+                );
+            }
+
+            0 == n.length &&
+                this._addParameter(
+                    e,
+                    ""
+                );
+
+        } else {
+
+            this._addParameter(
+                e,
+                n
+            );
+        }
+    },
+
+    _getStringFromParameter: function (e) {
+
+        var n = e || "";
+
+        try {
+
+            (
+                "number" ==
+                    typeof e ||
+                "boolean" ==
+                    typeof e
+            ) &&
+                (n = e.toString());
+
+        } catch (e) {}
+
+        return n;
+    },
+
+    _addParameter: function (e, n) {
+
+        this._parameters[e] ||
+            (this._parameters[e] = []);
+
+        this._parameters[e].push(n);
+    },
+
+    get: function () {
+        return this._parameters;
+    },
+};
+
+function getSignature(
+    method,
+    urlPath,
+    params,
+    secret =
+        "f3ac5b086f3eab260520d8e3049561e6"
+) {
+
+    urlPath =
+        urlPath.split("?")[0];
+
+    urlPath =
+        urlPath.startsWith("http")
+            ? urlPath
+            : "https://api.audiomack.com/v1" +
+              urlPath;
+
+    const r =
+        new u(params).get();
+
+    const httpMethod =
+        method.toUpperCase();
+
+    const normdParams =
+        getNormalizedParams(r);
+
+    const l =
+        _encode(httpMethod) +
+        "&" +
+        _encode(urlPath) +
+        "&" +
+        _encode(normdParams);
+
+    const hash =
+        CryptoJS.HmacSHA1(
+            l,
+            secret + "&"
+        ).toString(
+            CryptoJS.enc.Base64
+        );
+
+    return hash;
+}
+
+function formatMusicItem(raw) {
+
+    return {
+        id: raw.id,
+        artwork:
+            raw.image ||
+            raw.image_base,
+        duration: +raw.duration,
+        title: raw.title,
+        artist: raw.artist,
+        album: raw.album,
+        url_slug: raw.url_slug,
+    };
+}
+
+function formatAlbumItem(raw) {
+
+    var _a, _b;
+
+    return {
+        artist: raw.artist,
+
+        artwork:
+            raw.image ||
+            raw.image_base,
+
+        id: raw.id,
+
+        date:
+            dayjs
+                .unix(+raw.released)
+                .format("YYYY-MM-DD"),
+
+        title: raw.title,
+
+        _musicList:
+            (_b =
+                (_a =
+                    raw === null ||
+                    raw === void 0
+                        ? void 0
+                        : raw.tracks) ===
+                    null ||
+                _a === void 0
+                    ? void 0
+                    : _a.map) ===
+                null ||
+            _b === void 0
+                ? void 0
+                : _b.call(
+                      _a,
+                      (it) => ({
+                          id:
+                              it.song_id ||
+                              it.id,
+
+                          artwork:
+                              raw.image ||
+                              raw.image_base,
+
+                          duration:
+                              +it.duration,
+
+                          title:
+                              it.title,
+
+                          artist:
+                              it.artist,
+
+                          album:
+                              raw.title,
+                      })
+                  ),
+    };
+}
+
+function formatMusicSheetItem(raw) {
+
+    var _a,
+        _b,
+        _c,
+        _d,
+        _e,
+        _f;
+
+    return {
+
+        worksNum:
+            raw.track_count,
+
+        id:
+            raw.id,
+
+        title:
+            raw.title,
+
+        artist:
+            (_a =
+                raw.artist) ===
+                null ||
+            _a === void 0
+                ? void 0
+                : _a.name,
+
+        artwork:
+            raw.image ||
+            raw.image_base,
+
+        artistItem: {
+
+            id:
+                (_b =
+                    raw.artist) ===
+                    null ||
+                _b === void 0
+                    ? void 0
+                    : _b.id,
+
+            avatar:
+                ((_c =
+                    raw.artist) ===
+                    null ||
+                _c === void 0
+                    ? void 0
+                    : _c.image) ||
+                ((_d =
+                    raw.artist) ===
+                    null ||
+                _d === void 0
+                    ? void 0
+                    : _d.image_base),
+
+            name:
+                (_e =
+                    raw.artist) ===
+                    null ||
+                _e === void 0
+                    ? void 0
+                    : _e.name,
+
+            url_slug:
+                (_f =
+                    raw.artist) ===
+                    null ||
+                _f === void 0
+                    ? void 0
+                    : _f.url_slug,
+        },
+
+        createAt:
+            dayjs
+                .unix(+raw.created)
+                .format("YYYY-MM-DD"),
+
+        url_slug:
+            raw.url_slug,
+    };
+}
+
+async function searchBase(
+    query,
+    page,
+    show
+) {
+
+    const params = {
+
+        limit:
+            pageSize,
+
+        oauth_consumer_key:
+            "audiomack-js",
+
+        oauth_nonce:
+            nonce(32),
+
+        oauth_signature_method:
+            "HMAC-SHA1",
+
+        oauth_timestamp:
+            Math.round(
+                Date.now() / 1e3
+            ),
+
+        oauth_version:
+            "1.0",
+
+        page:
+            page,
+
+        q:
+            query,
+
+        show:
+            show,
+
+        sort:
+            "popular",
+    };
+
+    const oauth_signature =
+        getSignature(
+            "GET",
+            "/search",
+            params
+        );
+
+    const results =
+        (
+            await axios_1.default.get(
+                "https://api.audiomack.com/v1/search",
+                {
+                    headers,
+                    params:
+                        Object.assign(
+                            Object.assign(
+                                {},
+                                params
+                            ),
+                            {
+                                oauth_signature,
+                            }
+                        ),
+                }
+            )
+        ).data.results;
+
+    return results;
+}
+
+async function searchMusic(
+    query,
+    page
+) {
+
+    const results =
+        await searchBase(
+            query,
+            page,
+            "songs"
+        );
+
+    return {
+        isEnd:
+            results.length <
+            pageSize,
+
+        data:
+            results.map(
+                formatMusicItem
+            ),
+    };
+}
+
+async function searchAlbum(
+    query,
+    page
+) {
+
+    const results =
+        await searchBase(
+            query,
+            page,
+            "albums"
+        );
+
+    return {
+        isEnd:
+            results.length <
+            pageSize,
+
+        data:
+            results.map(
+                formatAlbumItem
+            ),
+    };
+}
+
+async function searchMusicSheet(
+    query,
+    page
+) {
+
+    const results =
+        await searchBase(
+            query,
+            page,
+            "playlists"
+        );
+
+    return {
+        isEnd:
+            results.length <
+            pageSize,
+
+        data:
+            results.map(
+                formatMusicSheetItem
+            ),
+    };
+}
+
+async function searchArtist(
+    query,
+    page
+) {
+
+    const results =
+        await searchBase(
+            query,
+            page,
+            "artists"
+        );
+
+    return {
+        isEnd:
+            results.length <
+            pageSize,
+
+        data:
+            results.map(
+                (raw) => ({
+                    name:
+                        raw.name,
+
+                    id:
+                        raw.id,
+
+                    avatar:
+                        raw.image ||
+                        raw.image_base,
+
+                    url_slug:
+                        raw.url_slug,
+                })
+            ),
+    };
+}
+
+let dataUrlBase;
+
+async function getDataUrlBase() {
+
+    if (dataUrlBase) {
+        return dataUrlBase;
+    }
+
+    const rawHtml =
+        (
+            await axios_1.default.get(
+                "https://audiomack.com/"
+            )
+        ).data;
+
+    const $ =
+        (0, cheerio_1.load)(
+            rawHtml
+        );
+
+    const script =
+        $(
+            "script#__NEXT_DATA__"
+        ).text();
+
+    const jsonObj =
+        JSON.parse(script);
+
+    if (jsonObj.buildId) {
+
+        dataUrlBase =
+            `https://audiomack.com/_next/data/${jsonObj.buildId}`;
+    }
+
+    return dataUrlBase;
+}
+
+async function getArtistWorks(
+    artistItem,
+    page,
+    type
+) {
+
+    if (type === "music") {
+
+        const params = {
+
+            artist_id:
+                artistItem.id,
+
+            limit:
+                pageSize,
+
+            oauth_consumer_key:
+                "audiomack-js",
+
+            oauth_nonce:
+                nonce(32),
+
+            oauth_signature_method:
+                "HMAC-SHA1",
+
+            oauth_timestamp:
+                Math.round(
+                    Date.now() / 1e3
+                ),
+
+            oauth_version:
+                "1.0",
+
+            page:
+                page,
+
+            sort:
+                "rank",
+
+            type:
+                "songs",
+        };
+
+        const oauth_signature =
+            getSignature(
+                "GET",
+                "/search_artist_content",
+                params
+            );
+
+        const results =
+            (
+                await axios_1.default.get(
+                    "https://api.audiomack.com/v1/search_artist_content",
+                    {
+                        headers,
+
+                        params:
+                            Object.assign(
+                                Object.assign(
+                                    {},
+                                    params
+                                ),
+                                {
+                                    oauth_signature,
+                                }
+                            ),
+                    }
+                )
+            ).data.results;
+
+        return {
+
+            isEnd:
+                results.length <
+                pageSize,
+
+            data:
+                results.map(
+                    formatMusicItem
+                ),
+        };
+
+    } else if (
+        type === "album"
+    ) {
+
+        const params = {
+
+            artist_id:
+                artistItem.id,
+
+            limit:
+                pageSize,
+
+            oauth_consumer_key:
+                "audiomack-js",
+
+            oauth_nonce:
+                nonce(32),
+
+            oauth_signature_method:
+                "HMAC-SHA1",
+
+            oauth_timestamp:
+                Math.round(
+                    Date.now() / 1e3
+                ),
+
+            oauth_version:
+                "1.0",
+
+            page:
+                page,
+
+            sort:
+                "rank",
+
+            type:
+                "albums",
+        };
+
+        const oauth_signature =
+            getSignature(
+                "GET",
+                "/search_artist_content",
+                params
+            );
+
+        const results =
+            (
+                await axios_1.default.get(
+                    "https://api.audiomack.com/v1/search_artist_content",
+                    {
+                        headers,
+
+                        params:
+                            Object.assign(
+                                Object.assign(
+                                    {},
+                                    params
+                                ),
+                                {
+                                    oauth_signature,
+                                }
+                            ),
+                    }
+                )
+            ).data.results;
+
+        return {
+
+            isEnd:
+                results.length <
+                pageSize,
+
+            data:
+                results.map(
+                    formatAlbumItem
+                ),
+        };
+    }
+}
+
+async function getMusicSheetInfo(
+    sheet,
+    page
+) {
+
+    const _dataUrlBase =
+        await getDataUrlBase();
+
+    const res =
+        (
+            await axios_1.default.get(
+                `${_dataUrlBase}/${sheet.artistItem.url_slug}/playlist/${sheet.url_slug}.json`,
+                {
+                    params: {
+
+                        page_slug:
+                            sheet.artistItem.url_slug,
+
+                        playlist_slug:
+                            sheet.url_slug,
+                    },
+
+                    headers:
+                        Object.assign(
+                            {},
+                            headers
+                        ),
+                }
+            )
+        ).data;
+
+    const musicPage =
+        res.pageProps
+            .initialState
+            .musicPage;
+
+    const targetKey =
+        Object.keys(
+            musicPage
+        ).find(
+            (it) =>
+                it.startsWith(
+                    "musicMusicPage"
+                )
+        );
+
+    const tracks =
+        musicPage[targetKey]
+            .results
+            .tracks;
+
+    return {
+
+        isEnd:
+            true,
+
+        musicList:
+            tracks.map(
+                formatMusicItem
+            ),
+    };
+}
+
+async function getMediaSource(
+    musicItem,
+    quality
+) {
+
+    if (
+        quality !==
+        "standard"
+    ) {
+        return;
+    }
+
+    const params = {
+
+        environment:
+            "desktop-web",
+
+        hq:
+            true,
+
+        oauth_consumer_key:
+            "audiomack-js",
+
+        oauth_nonce:
+            nonce(32),
+
+        oauth_signature_method:
+            "HMAC-SHA1",
+
+        oauth_timestamp:
+            Math.round(
+                Date.now() / 1e3
+            ),
+
+        oauth_version:
+            "1.0",
+
+        section:
+            "/search",
+    };
+
+    const oauth_signature =
+        getSignature(
+            "GET",
+            `/music/play/${musicItem.id}`,
+            params
+        );
+
+    const res =
+        (
+            await axios_1.default.get(
+                `https://api.audiomack.com/v1/music/play/${musicItem.id}`,
+                {
+                    headers:
+                        Object.assign(
+                            Object.assign(
+                                {},
+                                headers
+                            ),
+                            {
+                                origin:
+                                    "https://audiomack.com",
+                            }
+                        ),
+
+                    params:
+                        Object.assign(
+                            Object.assign(
+                                {},
+                                params
+                            ),
+                            {
+                                oauth_signature,
+                            }
+                        ),
+                }
+            )
+        ).data;
+
+    return {
+        url:
+            res.signedUrl,
+    };
+}
+
+async function getAlbumInfo(
+    albumItem
+) {
+
+    return {
+        musicList:
+            albumItem._musicList.map(
+                (it) =>
+                    Object.assign(
+                        {},
+                        it
+                    )
+            ),
+    };
+}
+
+async function getRecommendSheetTags() {
+
+    const rawHtml =
+        (
+            await axios_1.default.get(
+                "https://audiomack.com/playlists"
+            )
+        ).data;
+
+    const $ =
+        (0, cheerio_1.load)(
+            rawHtml
+        );
+
+    const script =
+        $(
+            "script#__NEXT_DATA__"
+        ).text();
+
+    const jsonObj =
+        JSON.parse(script);
+
+    return {
+
+        data: [
+            {
+                data:
+                    jsonObj.props
+                        .pageProps
+                        .categories,
+            },
+        ],
+    };
+}
+
+async function getRecommendSheetsByTag(
+    tag,
+    page
+) {
+
+    if (!tag.id) {
+
+        tag = {
+            id: "34",
+            title:
+                "What's New",
+            url_slug:
+                "whats-new",
+        };
+    }
+
+    const params = {
+
+        featured:
+            "yes",
+
+        limit:
+            pageSize,
+
+        oauth_consumer_key:
+            "audiomack-js",
+
+        oauth_nonce:
+            nonce(32),
+
+        oauth_signature_method:
+            "HMAC-SHA1",
+
+        oauth_timestamp:
+            Math.round(
+                Date.now() / 1e3
+            ),
+
+        oauth_version:
+            "1.0",
+
+        page:
+            page,
+
+        slug:
+            tag.url_slug,
+    };
+
+    const oauth_signature =
+        getSignature(
+            "GET",
+            "/playlist/categories",
+            params
+        );
+
+    const results =
+        (
+            await axios_1.default.get(
+                "https://api.audiomack.com/v1/playlist/categories",
+                {
+                    headers,
+
+                    params:
+                        Object.assign(
+                            Object.assign(
+                                {},
+                                params
+                            ),
+                            {
+                                oauth_signature,
+                            }
+                        ),
+                }
+            )
+        ).data.results
+            .playlists;
+
+    return {
+
+        isEnd:
+            results.length <
+            pageSize,
+
+        data:
+            results.map(
+                formatMusicSheetItem
+            ),
+    };
+}
+
+async function getTopLists() {
+
+    const genres = [
+
+        {
+            title:
+                "All Genres",
+            url_slug:
+                null,
+        },
+
+        {
+            title:
+                "Afrosounds",
+            url_slug:
+                "afrobeats",
+        },
+
+        {
+            title:
+                "Hip-Hop/Rap",
+            url_slug:
+                "rap",
+        },
+
+        {
+            title:
+                "Latin",
+            url_slug:
+                "latin",
+        },
+
+        {
+            title:
+                "Caribbean",
+            url_slug:
+                "caribbean",
+        },
+
+        {
+            title:
+                "Pop",
+            url_slug:
+                "pop",
+        },
+
+        {
+            title:
+                "R&B",
+            url_slug:
+                "rb",
+        },
+
+        {
+            title:
+                "Gospel",
+            url_slug:
+                "gospel",
+        },
+
+        {
+            title:
+                "Electronic",
+            url_slug:
+                "electronic",
+        },
+
+        {
+            title:
+                "Rock",
+            url_slug:
+                "rock",
+        },
+
+        {
+            title:
+                "Punjabi",
+            url_slug:
+                "punjabi",
+        },
+
+        {
+            title:
+                "Country",
+            url_slug:
+                "country",
+        },
+
+        {
+            title:
+                "Instrumental",
+            url_slug:
+                "instrumental",
+        },
+
+        {
+            title:
+                "Podcast",
+            url_slug:
+                "podcast",
+        },
+    ];
+
+    return [
+
+        {
+            title:
+                "Trending Songs",
+
+            data:
+                genres.map(
+                    (it) => {
+
+                        var _a;
+
+                        return Object.assign(
+                            Object.assign(
+                                {},
+                                it
+                            ),
+                            {
+                                type:
+                                    "trending",
+
+                                id:
+                                    (_a =
+                                        it.url_slug) !==
+                                        null &&
+                                    _a !==
+                                        void 0
+                                        ? _a
+                                        : it.title,
+                            }
+                        );
+                    }
+                ),
+        },
+
+        {
+            title:
+                "Recently Added Music",
+
+            data:
+                genres.map(
+                    (it) => {
+
+                        var _a;
+
+                        return Object.assign(
+                            Object.assign(
+                                {},
+                                it
+                            ),
+                            {
+                                type:
+                                    "recent",
+
+                                id:
+                                    (_a =
+                                        it.url_slug) !==
+                                        null &&
+                                    _a !==
+                                        void 0
+                                        ? _a
+                                        : it.title,
+                            }
+                        );
+                    }
+                ),
+        },
+    ];
+}
+
+async function getTopListDetail(
+    topListItem,
+    page = 1
+) {
+
+    const type =
+        topListItem.type;
+
+    const partialUrl =
+        `/music/${topListItem.url_slug ? `${topListItem.url_slug}/` : ""}${type}/page/${page}`;
+
+    const url =
+        `https://api.audiomack.com/v1${partialUrl}`;
+
+    const params = {
+
+        oauth_consumer_key:
+            "audiomack-js",
+
+        oauth_nonce:
+            nonce(32),
+
+        oauth_signature_method:
+            "HMAC-SHA1",
+
+        oauth_timestamp:
+            Math.round(
+                Date.now() / 1e3
+            ),
+
+        oauth_version:
+            "1.0",
+
+        type:
+            "song",
+    };
+
+    const oauth_signature =
+        getSignature(
+            "GET",
+            partialUrl,
+            params
+        );
+
+    const results =
+        (
+            await axios_1.default.get(
+                url,
+                {
+                    headers,
+
+                    params:
+                        Object.assign(
+                            Object.assign(
+                                {},
+                                params
+                            ),
+                            {
+                                oauth_signature,
+                            }
+                        ),
+                }
+            )
+        ).data.results;
+
+    return {
+        musicList:
+            results.map(
+                formatMusicItem
+            ),
+    };
+}
+
+
+/* =========================================================
+ * 新增：外部歌单导入
  *
- * 支持：
- * 1. 网易云音乐歌单
- * 2. QQ音乐歌单
- * 3. 自动识别平台
- * 4. QQ歌曲自动匹配网易云
- *
- * MusicFree 0.6.x
- */
-
-const NETEASE_API =
-  'https://music.163.com';
-
-const QQ_API =
-  'https://c.y.qq.com';
-
-const TIMEOUT = 10000;
-
-
-/* =========================================================
- * 基础工具
+ * 保留上面的 Audiomack 原功能不变
  * ========================================================= */
 
-function text(value) {
-  return String(value || '').trim();
-}
 
-function normalize(value) {
-  return text(value)
-    .toLowerCase()
-    .replace(/[\u3000\s]+/g, '')
-    .replace(/[《》「」『』【】（）()[\]{}<>]/g, '')
-    .replace(/[·•・,，.。!！?？:：;；/\\|_-]/g, '');
-}
+/* ---------- 通用 ---------- */
 
-function sleep(ms) {
-  return new Promise(function (resolve) {
-    setTimeout(resolve, ms);
-  });
-}
+function normalizeText(value) {
 
-
-/* =========================================================
- * 歌手处理
- * ========================================================= */
-
-function getNeteaseArtists(song) {
-
-  if (
-    song &&
-    Array.isArray(song.ar)
-  ) {
-
-    return song.ar
-      .map(function (item) {
-        return item && item.name
-          ? item.name
-          : '';
-      })
-      .filter(Boolean)
-      .join(' / ');
-  }
-
-  if (
-    song &&
-    Array.isArray(song.artists)
-  ) {
-
-    return song.artists
-      .map(function (item) {
-        return item && item.name
-          ? item.name
-          : '';
-      })
-      .filter(Boolean)
-      .join(' / ');
-  }
-
-  return '';
+    return String(value || "")
+        .toLowerCase()
+        .replace(
+            /[\u3000\s]+/g,
+            ""
+        )
+        .replace(
+            /[《》「」『』【】（）()[\]{}<>]/g,
+            ""
+        )
+        .replace(
+            /[·•・,，.。!！?？:：;；/\\|_-]/g,
+            ""
+        );
 }
 
 
-/* =========================================================
- * 平台识别
- * ========================================================= */
+/* ---------- 平台识别 ---------- */
 
-function detectPlatform(url) {
+function detectImportPlatform(
+    url
+) {
 
-  const value =
-    text(url).toLowerCase();
+    const value =
+        String(url || "")
+            .toLowerCase();
 
-  /*
-   * 网易云
-   */
-  if (
-    value.includes('music.163.com') ||
-    value.includes('163cn.tv')
-  ) {
-    return 'netease';
-  }
+    if (
+        value.includes(
+            "music.163.com"
+        ) ||
+        value.includes(
+            "163cn.tv"
+        )
+    ) {
+        return "netease";
+    }
 
-  /*
-   * QQ音乐
-   */
-  if (
-    value.includes('qq.com') ||
-    value.includes('y.qq.com') ||
-    value.includes('i.y.qq.com')
-  ) {
-    return 'qq';
-  }
+    if (
+        value.includes(
+            "y.qq.com"
+        ) ||
+        value.includes(
+            "i.y.qq.com"
+        ) ||
+        value.includes(
+            "qq.com"
+        )
+    ) {
+        return "qq";
+    }
 
-  return null;
-}
-
-
-/* =========================================================
- * 网易云歌单 ID
- * ========================================================= */
-
-function parseNeteasePlaylistId(url) {
-
-  const value =
-    text(url);
-
-  let match;
-
-  /*
-   * playlist?id=123
-   */
-  match =
-    value.match(
-      /[?&]id=(\d+)/i
-    );
-
-  if (match) {
-    return match[1];
-  }
-
-  /*
-   * playlist/123
-   */
-  match =
-    value.match(
-      /playlist[\/_-](\d+)/i
-    );
-
-  if (match) {
-    return match[1];
-  }
-
-  /*
-   * #/playlist?id=123
-   */
-  match =
-    value.match(
-      /playlist.*?[?&]id=(\d+)/i
-    );
-
-  if (match) {
-    return match[1];
-  }
-
-  return null;
-}
-
-
-/* =========================================================
- * QQ歌单 ID
- * ========================================================= */
-
-function parseQQPlaylistId(url) {
-
-  const value =
-    text(url);
-
-  let match;
-
-  /*
-   * disstid=123
-   */
-  match =
-    value.match(
-      /[?&]disstid=(\d+)/i
-    );
-
-  if (match) {
-    return match[1];
-  }
-
-  /*
-   * playlist/123
-   */
-  match =
-    value.match(
-      /playlist[\/_-](\d+)/i
-    );
-
-  if (match) {
-    return match[1];
-  }
-
-  /*
-   * detail/123
-   */
-  match =
-    value.match(
-      /detail[\/_-](\d+)/i
-    );
-
-  if (match) {
-    return match[1];
-  }
-
-  /*
-   * id=123
-   */
-  match =
-    value.match(
-      /[?&]id=(\d+)/i
-    );
-
-  if (match) {
-    return match[1];
-  }
-
-  return null;
-}
-
-
-/* =========================================================
- * 网易云歌曲转换
- * ========================================================= */
-
-function convertNeteaseSong(song) {
-
-  if (
-    !song ||
-    song.id == null
-  ) {
     return null;
-  }
+}
 
-  return {
 
-    id:
-      String(song.id),
+/* ---------- 网易云 ID ---------- */
 
-    title:
-      text(song.name),
+function getNeteasePlaylistId(
+    url
+) {
 
-    artist:
-      getNeteaseArtists(song),
+    const value =
+        String(url || "");
 
-    album:
-      song.al &&
-      song.al.name
-        ? song.al.name
-        : '',
+    let match =
+        value.match(
+            /[?&]id=(\d+)/i
+        );
 
-    artwork:
-      song.al &&
-      song.al.picUrl
-        ? song.al.picUrl
-        : '',
+    if (match) {
+        return match[1];
+    }
 
-    duration:
-      song.dt
-        ? Math.floor(
-            song.dt / 1000
-          )
-        : undefined,
+    match =
+        value.match(
+            /playlist[\/_-](\d+)/i
+        );
 
-    platform:
-      '网易云音乐'
-  };
+    if (match) {
+        return match[1];
+    }
+
+    match =
+        value.match(
+            /playlist.*?id=(\d+)/i
+        );
+
+    if (match) {
+        return match[1];
+    }
+
+    return null;
+}
+
+
+/* ---------- QQ ID ---------- */
+
+function getQQPlaylistId(
+    url
+) {
+
+    const value =
+        String(url || "");
+
+    let match =
+        value.match(
+            /\/playlist\/(\d+)/i
+        );
+
+    if (match) {
+        return match[1];
+    }
+
+    match =
+        value.match(
+            /[?&]id=(\d+)/i
+        );
+
+    if (match) {
+        return match[1];
+    }
+
+    match =
+        value.match(
+            /[?&]disstid=(\d+)/i
+        );
+
+    if (match) {
+        return match[1];
+    }
+
+    match =
+        value.match(
+            /detail\/(\d+)/i
+        );
+
+    if (match) {
+        return match[1];
+    }
+
+    return null;
 }
 
 
@@ -286,596 +1477,873 @@ function convertNeteaseSong(song) {
  * 网易云歌单
  * ========================================================= */
 
-async function fetchNeteasePlaylist(
-  playlistId
+async function importNeteasePlaylist(
+    url
 ) {
 
-  const response =
-    await axios.get(
-      NETEASE_API +
-        '/api/playlist/detail',
-      {
-        params: {
-          id:
-            playlistId
-        },
+    const playlistId =
+        getNeteasePlaylistId(
+            url
+        );
 
-        timeout:
-          TIMEOUT,
+    if (!playlistId) {
+        throw new Error(
+            "无法识别网易云歌单ID"
+        );
+    }
 
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0'
-        }
-      }
-    );
+    const response =
+        await axios_1.default.get(
+            "https://music.163.com/api/playlist/detail",
+            {
+                params: {
+                    id:
+                        playlistId
+                },
 
-  const result =
-    response.data;
+                headers: {
+                    "User-Agent":
+                        headers[
+                            "user-agent"
+                        ],
 
-  if (
-    !result ||
-    !result.result
-  ) {
-    throw new Error(
-      '网易云歌单不存在或无法访问'
-    );
-  }
+                    Referer:
+                        "https://music.163.com/"
+                },
 
-  const playlist =
-    result.result;
+                timeout:
+                    12000
+            }
+        );
 
-  const tracks =
-    Array.isArray(
-      playlist.tracks
-    )
-      ? playlist.tracks
-      : [];
+    const body =
+        response.data;
 
-  const songs =
-    tracks
-      .map(
-        convertNeteaseSong
-      )
-      .filter(Boolean);
+    if (
+        !body ||
+        !body.result
+    ) {
+        throw new Error(
+            "网易云歌单读取失败"
+        );
+    }
 
-  return {
+    const tracks =
+        Array.isArray(
+            body.result.tracks
+        )
+            ? body.result.tracks
+            : [];
 
-    name:
-      playlist.name ||
-      '网易云歌单',
+    const result =
+        tracks
+            .map(
+                function (track) {
 
-    artwork:
-      playlist.coverImgUrl ||
-      '',
+                    if (
+                        !track ||
+                        track.id ==
+                            null
+                    ) {
+                        return null;
+                    }
 
-    songs:
-      songs
-  };
+                    const artists =
+                        Array.isArray(
+                            track.ar
+                        )
+                            ? track.ar
+                                  .map(
+                                      function (
+                                          artist
+                                      ) {
+                                          return artist &&
+                                              artist.name
+                                              ? artist.name
+                                              : "";
+                                      }
+                                  )
+                                  .filter(
+                                      Boolean
+                                  )
+                                  .join(
+                                      " / "
+                                  )
+                            : "";
+
+                    return {
+
+                        id:
+                            String(
+                                track.id
+                            ),
+
+                        title:
+                            track.name ||
+                            "",
+
+                        artist:
+                            artists,
+
+                        album:
+                            track.al &&
+                            track.al.name
+                                ? track.al.name
+                                : "",
+
+                        artwork:
+                            track.al &&
+                            track.al.picUrl
+                                ? track.al.picUrl
+                                : "",
+
+                        duration:
+                            track.dt
+                                ? Math.floor(
+                                      track.dt /
+                                          1000
+                                  )
+                                : undefined,
+
+                        platform:
+                            "网易云音乐"
+                    };
+                }
+            )
+            .filter(
+                Boolean
+            );
+
+    return result;
 }
 
 
 /* =========================================================
- * QQ歌单获取
+ * QQ歌单
  * ========================================================= */
 
-async function fetchQQPlaylist(
-  playlistId
+async function importQQPlaylist(
+    url
 ) {
 
-  /*
-   * QQ公开歌单接口。
-   *
-   * 这个接口可能随QQ页面改版变化。
-   */
-
-  const response =
-    await axios.get(
-      QQ_API +
-        '/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg',
-      {
-
-        params: {
-
-          type:
-            1,
-
-          json:
-            1,
-
-          utf8:
-            1,
-
-          onlysong:
-            0,
-
-          disstid:
-            playlistId,
-
-          format:
-            'json',
-
-          g_tk:
-            5381
-        },
-
-        timeout:
-          TIMEOUT,
-
-        headers: {
-
-          Referer:
-            'https://y.qq.com/',
-
-          'User-Agent':
-            'Mozilla/5.0'
-        },
-
-        responseType:
-          'text'
-      }
-    );
-
-  let data =
-    response.data;
-
-  /*
-   * QQ接口有时会返回：
-   *
-   * MusicJsonCallback(...)
-   */
-  if (
-    typeof data === 'string'
-  ) {
-
-    data =
-      data
-        .replace(
-          /^MusicJsonCallback\(/,
-          ''
-        )
-        .replace(
-          /\);?\s*$/,
-          ''
+    const playlistId =
+        getQQPlaylistId(
+            url
         );
 
-    try {
-      data =
-        JSON.parse(data);
-    } catch (e) {
-      throw new Error(
-        'QQ歌单数据解析失败'
-      );
+    if (!playlistId) {
+        throw new Error(
+            "无法识别QQ音乐歌单ID"
+        );
     }
-  }
 
-  if (
-    !data
-  ) {
-    throw new Error(
-      'QQ歌单没有返回数据'
-    );
-  }
+    /*
+     * QQ公开接口。
+     *
+     * 先尝试移动/网页歌单接口。
+     */
+    let data = null;
 
-  /*
-   * 兼容不同返回结构。
-   */
+    try {
 
-  let cdlist =
-    data.cdlist;
+        const response =
+            await axios_1.default.get(
+                "https://c.y.qq.com/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg",
+                {
+                    params: {
 
-  if (
-    !Array.isArray(cdlist) ||
-    !cdlist.length
-  ) {
+                        type:
+                            1,
+
+                        json:
+                            1,
+
+                        utf8:
+                            1,
+
+                        onlysong:
+                            0,
+
+                        disstid:
+                            playlistId,
+
+                        format:
+                            "json",
+
+                        g_tk:
+                            5381
+                    },
+
+                    headers: {
+
+                        Referer:
+                            "https://y.qq.com/",
+
+                        "User-Agent":
+                            headers[
+                                "user-agent"
+                            ]
+                    },
+
+                    timeout:
+                        12000,
+
+                    responseType:
+                        "text"
+                }
+            );
+
+        data =
+            response.data;
+
+    } catch (error) {
+
+        console.log(
+            "[QQ歌单] API读取失败"
+        );
+    }
 
     if (
-      data.cdlist &&
-      typeof data.cdlist === 'object'
+        typeof data ===
+        "string"
     ) {
 
-      cdlist = [
-        data.cdlist
-      ];
+        data =
+            data
+                .replace(
+                    /^MusicJsonCallback\(/,
+                    ""
+                )
+                .replace(
+                    /\);?\s*$/,
+                    ""
+                );
+
+        try {
+
+            data =
+                JSON.parse(
+                    data
+                );
+
+        } catch (error) {
+
+            data =
+                null;
+        }
     }
-  }
 
-  if (
-    !Array.isArray(cdlist) ||
-    !cdlist.length
-  ) {
+    let playlist = null;
 
-    throw new Error(
-      'QQ歌单为空或接口不可访问'
-    );
-  }
+    if (
+        data &&
+        Array.isArray(
+            data.cdlist
+        ) &&
+        data.cdlist.length
+    ) {
 
-  const playlist =
-    cdlist[0];
+        playlist =
+            data.cdlist[0];
+    }
 
-  const list =
-    Array.isArray(
-      playlist.songlist
-    )
-      ? playlist.songlist
-      : [];
+    /*
+     * 某些情况下接口结构不同，
+     * 再尝试 QQ 歌单页面。
+     */
+    if (!playlist) {
 
-  return {
+        try {
 
-    name:
-      playlist.dissname ||
-      playlist.title ||
-      'QQ音乐歌单',
+            const page =
+                await axios_1.default.get(
+                    `https://y.qq.com/n/ryqq/playlist/${playlistId}`,
+                    {
+                        headers,
 
-    artwork:
-      playlist.logo ||
-      '',
+                        timeout:
+                            12000
+                    }
+                );
 
-    songs:
-      list
-        .map(function (song) {
+            const html =
+                page.data;
 
-          const singers =
-            Array.isArray(
-              song.singer
+            const $ =
+                (0, cheerio_1.load)(
+                    html
+                );
+
+            const script =
+                $(
+                    "script#__NEXT_DATA__"
+                ).text();
+
+            if (script) {
+
+                const json =
+                    JSON.parse(
+                        script
+                    );
+
+                playlist =
+                    findQQPlaylistData(
+                        json
+                    );
+            }
+
+        } catch (error) {
+
+            console.log(
+                "[QQ歌单] 页面读取失败"
+            );
+        }
+    }
+
+    if (!playlist) {
+
+        throw new Error(
+            "QQ音乐歌单无法公开读取"
+        );
+    }
+
+    const songlist =
+        Array.isArray(
+            playlist.songlist
+        )
+            ? playlist.songlist
+            : [];
+
+    /*
+     * 这里不把QQ ID直接当网易云ID。
+     *
+     * 后面会自动搜索网易云匹配。
+     */
+    const songs =
+        songlist
+            .map(
+                function (song) {
+
+                    const singers =
+                        Array.isArray(
+                            song.singer
+                        )
+                            ? song.singer
+                                  .map(
+                                      function (
+                                          singer
+                                      ) {
+                                          return singer &&
+                                              singer.name
+                                              ? singer.name
+                                              : "";
+                                      }
+                                  )
+                                  .filter(
+                                      Boolean
+                                  )
+                                  .join(
+                                      " / "
+                                  )
+                            : "";
+
+                    return {
+
+                        title:
+                            song.songname ||
+                            song.name ||
+                            "",
+
+                        artist:
+                            singers,
+
+                        album:
+                            song.album &&
+                            song.album.name
+                                ? song.album.name
+                                : "",
+
+                        qqMid:
+                            song.mid ||
+                            "",
+
+                        artwork:
+                            song.album &&
+                            song.album.mid
+                                ? "https://y.gtimg.cn/music/photo_new/T002R300x300M000" +
+                                  song.album.mid +
+                                  ".jpg"
+                                : ""
+                    };
+                }
             )
-              ? song.singer
-                  .map(function (item) {
-                    return item &&
-                      item.name
-                      ? item.name
-                      : '';
-                  })
-                  .filter(Boolean)
-                  .join(' / ')
-              : '';
+            .filter(
+                function (song) {
+                    return (
+                        song.title &&
+                        song.artist
+                    );
+                }
+            );
 
-          return {
+    /*
+     * 自动匹配网易云。
+     */
+    const matched =
+        await matchQQToNetease(
+            songs
+        );
 
-            mid:
-              text(
-                song.mid
-              ),
+    return matched;
+}
 
-            title:
-              text(
-                song.songname
-              ),
 
-            artist:
-              singers,
+/* =========================================================
+ * 从QQ网页JSON中寻找歌单
+ * ========================================================= */
 
-            album:
-              song.album &&
-              song.album.name
-                ? song.album.name
-                : '',
+function findQQPlaylistData(
+    obj
+) {
 
-            artwork:
-              song.album &&
-              song.album.mid
-                ? (
-                    'https://y.gtimg.cn/music/photo_new/T002R300x300M000' +
-                    song.album.mid +
-                    '.jpg'
-                  )
-                : ''
-          };
-        })
-        .filter(function (song) {
-          return (
-            song.title &&
-            song.artist
-          );
-        })
-  };
+    if (!obj) {
+        return null;
+    }
+
+    if (
+        typeof obj !==
+        "object"
+    ) {
+        return null;
+    }
+
+    if (
+        Array.isArray(
+            obj.songlist
+        )
+    ) {
+
+        return obj;
+    }
+
+    if (
+        obj.cdlist &&
+        Array.isArray(
+            obj.cdlist
+        ) &&
+        obj.cdlist.length
+    ) {
+
+        return obj.cdlist[0];
+    }
+
+    for (
+        const key in obj
+    ) {
+
+        try {
+
+            const result =
+                findQQPlaylistData(
+                    obj[key]
+                );
+
+            if (result) {
+                return result;
+            }
+
+        } catch (error) {}
+    }
+
+    return null;
 }
 
 
 /* =========================================================
  * 网易云搜索
- *
- * 用于把 QQ歌曲自动匹配成网易云歌曲。
  * ========================================================= */
 
-async function searchNeteaseSong(
-  title,
-  artist
+async function searchNeteaseForImport(
+    title,
+    artist
 ) {
 
-  const keyword =
-    text(title) +
-    ' ' +
-    text(artist);
+    const keyword =
+        String(title || "") +
+        " " +
+        String(artist || "");
 
-  try {
+    try {
 
-    const response =
-      await axios.get(
-        NETEASE_API +
-          '/api/search/get/web',
-        {
+        const response =
+            await axios_1.default.get(
+                "https://music.163.com/api/search/get/web",
+                {
 
-          params: {
+                    params: {
 
-            s:
-              keyword,
+                        s:
+                            keyword,
 
-            type:
-              1,
+                        type:
+                            1,
 
-            offset:
-              0,
+                        offset:
+                            0,
 
-            total:
-              true,
+                        total:
+                            "true",
 
-            limit:
-              20
-          },
+                        limit:
+                            20
+                    },
 
-          timeout:
-            TIMEOUT,
+                    headers: {
 
-          headers: {
+                        "User-Agent":
+                            headers[
+                                "user-agent"
+                            ],
 
-            'User-Agent':
-              'Mozilla/5.0'
-          }
+                        Referer:
+                            "https://music.163.com/"
+                    },
+
+                    timeout:
+                        8000
+                }
+            );
+
+        const body =
+            response.data;
+
+        if (
+            !body ||
+            !body.result ||
+            !Array.isArray(
+                body.result.songs
+            )
+        ) {
+            return null;
         }
-      );
 
-    const result =
-      response.data;
+        const songs =
+            body.result.songs;
 
-    if (
-      !result ||
-      !result.result ||
-      !Array.isArray(
-        result.result.songs
-      )
-    ) {
-      return null;
-    }
+        const wantedTitle =
+            normalizeText(
+                title
+            );
 
-    const songs =
-      result.result.songs;
+        const wantedArtist =
+            normalizeText(
+                artist
+            );
 
-    const wantedTitle =
-      normalize(title);
+        let best =
+            null;
 
-    const wantedArtist =
-      normalize(artist);
+        let bestScore =
+            -1;
 
-    let best =
-      null;
+        songs.forEach(
+            function (song) {
 
-    let bestScore =
-      -Infinity;
+                const songTitle =
+                    normalizeText(
+                        song.name
+                    );
 
-    songs.forEach(function (song) {
+                const songArtist =
+                    normalizeText(
+                        Array.isArray(
+                            song.ar
+                        )
+                            ? song.ar
+                                  .map(
+                                      function (
+                                          artist
+                                      ) {
+                                          return artist &&
+                                              artist.name
+                                              ? artist.name
+                                              : "";
+                                      }
+                                  )
+                                  .filter(
+                                      Boolean
+                                  )
+                                  .join(
+                                      ""
+                                  )
+                            : ""
+                    );
 
-      const songTitle =
-        normalize(song.name);
+                let score = 0;
 
-      const songArtist =
-        normalize(
-          getNeteaseArtists(song)
+                /*
+                 * 歌名完全相同
+                 */
+                if (
+                    songTitle ===
+                    wantedTitle
+                ) {
+
+                    score +=
+                        10000;
+
+                } else if (
+                    songTitle.includes(
+                        wantedTitle
+                    )
+                ) {
+
+                    score +=
+                        5000;
+
+                } else {
+
+                    return;
+                }
+
+                /*
+                 * 歌手完全相同
+                 */
+                if (
+                    songArtist ===
+                    wantedArtist
+                ) {
+
+                    score +=
+                        12000;
+
+                } else if (
+                    songArtist.includes(
+                        wantedArtist
+                    ) ||
+                    wantedArtist.includes(
+                        songArtist
+                    )
+                ) {
+
+                    score +=
+                        6000;
+                }
+
+                /*
+                 * 排除明显特殊版本。
+                 */
+                const version =
+                    normalizeText(
+                        (
+                            song.name ||
+                            ""
+                        ) +
+                        " " +
+                        (
+                            song.al &&
+                            song.al.name
+                                ? song.al.name
+                                : ""
+                        )
+                    );
+
+                if (
+                    version.includes(
+                        "live"
+                    ) ||
+                    version.includes(
+                        "现场"
+                    ) ||
+                    version.includes(
+                        "remix"
+                    ) ||
+                    version.includes(
+                        "dj"
+                    ) ||
+                    version.includes(
+                        "伴奏"
+                    ) ||
+                    version.includes(
+                        "翻唱"
+                    )
+                ) {
+
+                    score -=
+                        4000;
+                }
+
+                if (
+                    score >
+                    bestScore
+                ) {
+
+                    bestScore =
+                        score;
+
+                    best =
+                        song;
+                }
+            }
         );
 
-      let score =
-        0;
+        /*
+         * 必须至少歌名完全匹配。
+         *
+         * 防止错误导入。
+         */
+        if (
+            !best ||
+            bestScore <
+                10000
+        ) {
+            return null;
+        }
 
-      /*
-       * 歌名完全匹配
-       */
-      if (
-        songTitle ===
-        wantedTitle
-      ) {
-        score +=
-          10000;
-      }
+        const artists =
+            Array.isArray(
+                best.ar
+            )
+                ? best.ar
+                      .map(
+                          function (
+                              artist
+                          ) {
+                              return artist &&
+                                  artist.name
+                                  ? artist.name
+                                  : "";
+                          }
+                      )
+                      .filter(
+                          Boolean
+                      )
+                      .join(
+                          " / "
+                      )
+                : "";
 
-      /*
-       * 歌名包含
-       */
-      else if (
-        songTitle.includes(
-          wantedTitle
-        ) ||
-        wantedTitle.includes(
-          songTitle
-        )
-      ) {
-        score +=
-          5000;
-      }
+        return {
 
-      /*
-       * 歌手完全匹配
-       */
-      if (
-        songArtist ===
-        wantedArtist
-      ) {
-        score +=
-          10000;
-      }
+            id:
+                String(
+                    best.id
+                ),
 
-      /*
-       * 歌手包含
-       */
-      else if (
-        songArtist.includes(
-          wantedArtist
-        ) ||
-        wantedArtist.includes(
-          songArtist
-        )
-      ) {
-        score +=
-          5000;
-      }
+            title:
+                best.name ||
+                title,
 
-      /*
-       * 双方都命中，
-       * 给巨大奖励。
-       */
-      if (
-        songTitle ===
-          wantedTitle &&
-        songArtist.includes(
-          wantedArtist
-        )
-      ) {
-        score +=
-          15000;
-      }
+            artist:
+                artists ||
+                artist,
 
-      /*
-       * 排除明显不同版本。
-       */
-      const version =
-        (
-          text(song.name) +
-          ' ' +
-          text(
-            song.al &&
-            song.al.name
-          )
-        ).toLowerCase();
+            album:
+                best.al &&
+                best.al.name
+                    ? best.al.name
+                    : "",
 
-      if (
-        version.includes(
-          'live'
-        ) ||
-        version.includes(
-          '现场'
-        ) ||
-        version.includes(
-          'remix'
-        ) ||
-        version.includes(
-          'dj'
-        ) ||
-        version.includes(
-          '伴奏'
-        ) ||
-        version.includes(
-          '翻唱'
-        )
-      ) {
-        score -=
-          3000;
-      }
+            artwork:
+                best.al &&
+                best.al.picUrl
+                    ? best.al.picUrl
+                    : "",
 
-      if (
-        score >
-        bestScore
-      ) {
+            duration:
+                best.dt
+                    ? Math.floor(
+                          best.dt /
+                              1000
+                      )
+                    : undefined,
 
-        bestScore =
-          score;
+            platform:
+                "网易云音乐"
+        };
 
-        best =
-          song;
-      }
-    });
+    } catch (error) {
 
-    /*
-     * 最低匹配分。
-     *
-     * 防止：
-     * QQ歌单一首歌
-     * 被错误匹配成完全不同的网易云歌曲。
-     */
-    if (
-      !best ||
-      bestScore < 10000
-    ) {
-      return null;
+        console.log(
+            "[网易云匹配失败]",
+            title
+        );
+
+        return null;
     }
-
-    return convertNeteaseSong(
-      best
-    );
-
-  } catch (error) {
-
-    console.log(
-      '[QQ → 网易云] 匹配失败:',
-      error &&
-      error.message
-        ? error.message
-        : error
-    );
-
-    return null;
-  }
 }
 
 
 /* =========================================================
- * 批量匹配
- *
- * 不一次性打爆网易云接口。
- * 每首之间稍微等待。
+ * QQ → 网易云
  * ========================================================= */
 
-async function matchQQSongs(
-  songs
+async function matchQQToNetease(
+    songs
 ) {
 
-  const result =
-    [];
-
-  for (
-    let i = 0;
-    i < songs.length;
-    i++
-  ) {
-
-    const song =
-      songs[i];
-
-    try {
-
-      const matched =
-        await searchNeteaseSong(
-          song.title,
-          song.artist
-        );
-
-      if (
-        matched
-      ) {
-
-        result.push(
-          matched
-        );
-      }
-
-    } catch (e) {
-
-      console.log(
-        '[匹配失败]',
-        song.title
-      );
-    }
+    const result = [];
 
     /*
-     * 避免连续请求过快。
+     * 为避免一次性请求太多，
+     * 一首一首匹配。
      */
-    if (
-      i <
-      songs.length - 1
+    for (
+        let i = 0;
+        i < songs.length;
+        i++
     ) {
-      await sleep(120);
-    }
-  }
 
-  return result;
+        const song =
+            songs[i];
+
+        try {
+
+            const matched =
+                await searchNeteaseForImport(
+                    song.title,
+                    song.artist
+                );
+
+            if (
+                matched
+            ) {
+
+                result.push(
+                    matched
+                );
+            }
+
+        } catch (error) {
+
+            console.log(
+                "[QQ → 网易云] 匹配失败:",
+                song.title
+            );
+        }
+
+        /*
+         * 小延迟。
+         */
+        if (
+            i <
+            songs.length - 1
+        ) {
+
+            await new Promise(
+                function (
+                    resolve
+                ) {
+                    setTimeout(
+                        resolve,
+                        100
+                    );
+                }
+            );
+        }
+    }
+
+    return result;
 }
 
 
@@ -883,188 +2351,279 @@ async function matchQQSongs(
  * 去重
  * ========================================================= */
 
-function deduplicate(
-  songs
+function deduplicateImportedSongs(
+    songs
 ) {
 
-  const map =
-    {};
+    const map = {};
+    const result = [];
 
-  const result =
-    [];
+    songs.forEach(
+        function (song) {
 
-  songs.forEach(function (song) {
+            if (
+                !song ||
+                !song.id
+            ) {
+                return;
+            }
 
-    const key =
-      String(
-        song.id
-      );
+            /*
+             * platform + id
+             */
+            const key =
+                String(
+                    song.platform ||
+                    ""
+                ) +
+                ":" +
+                String(
+                    song.id
+                );
 
-    if (
-      !key ||
-      map[key]
-    ) {
-      return;
-    }
+            if (
+                map[key]
+            ) {
+                return;
+            }
 
-    map[key] =
-      true;
+            map[key] =
+                true;
 
-    result.push(
-      song
+            result.push(
+                song
+            );
+        }
     );
-  });
 
-  return result;
+    return result;
 }
 
 
 /* =========================================================
- * MusicFree 插件
+ * 最终插件
  * ========================================================= */
 
 module.exports = {
 
-  /*
-   * 这里保持网易云平台。
-   *
-   * 因为QQ歌曲最终会自动匹配成网易云歌曲。
-   */
-  platform:
-    '网易云音乐',
+    /*
+     * 原 Audiomack 身份保留。
+     */
+    platform:
+        "Audiomack",
 
-  version:
-    '1.0.0',
+    version:
+        "0.1.0",
 
-  author:
-    'a1134983523-collab',
+    author:
+        "猫头猫 + a1134983523-collab",
 
-  appVersion:
-    '>=0.6.0',
+    appVersion:
+        ">=0.6.0",
 
-  description:
-    '网易云/QQ音乐外部歌单导入与自动匹配',
+    primaryKey: [
+        "id",
+        "url_slug"
+    ],
 
-  /*
-   * 歌单导入提示。
-   */
-  hints: {
+    srcUrl:
+        "https://raw.githubusercontent.com/a1134983523-collab/MusicFreePlugins1/main/index.js",
 
-    importMusicSheet:
-      '粘贴网易云或QQ音乐歌单链接，插件会自动识别并导入；QQ音乐歌单会自动匹配到网易云。'
-  },
+    cacheControl:
+        "no-cache",
 
-
-  /* =======================================================
-   * 导入歌单
-   * ======================================================= */
-
-  async importMusicSheet(
-    urlLike
-  ) {
-
-    const url =
-      text(urlLike);
-
-    if (!url) {
-      return [];
-    }
+    supportedSearchType: [
+        "music",
+        "album",
+        "sheet",
+        "artist"
+    ],
 
     /*
-     * 自动识别平台。
+     * ============================================
+     * 新增：歌单导入提示
+     * ============================================
      */
-    const platform =
-      detectPlatform(url);
+    hints: {
 
-    if (
-      platform ===
-      'netease'
-    ) {
-
-      /*
-       * ==========================
-       * 网易云歌单
-       * ==========================
-       */
-
-      const playlistId =
-        parseNeteasePlaylistId(
-          url
-        );
-
-      if (!playlistId) {
-
-        throw new Error(
-          '无法识别网易云歌单 ID'
-        );
-      }
-
-      const playlist =
-        await fetchNeteasePlaylist(
-          playlistId
-        );
-
-      /*
-       * 直接返回网易云歌曲。
-       */
-      return deduplicate(
-        playlist.songs
-      );
-    }
-
-
-    if (
-      platform ===
-      'qq'
-    ) {
-
-      /*
-       * ==========================
-       * QQ音乐歌单
-       * ==========================
-       */
-
-      const playlistId =
-        parseQQPlaylistId(
-          url
-        );
-
-      if (!playlistId) {
-
-        throw new Error(
-          '无法识别QQ音乐歌单 ID'
-        );
-      }
-
-      const playlist =
-        await fetchQQPlaylist(
-          playlistId
-        );
-
-      /*
-       * QQ歌曲：
-       *
-       * 自动搜索网易云对应歌曲。
-       */
-      const matched =
-        await matchQQSongs(
-          playlist.songs
-        );
-
-      return deduplicate(
-        matched
-      );
-    }
+        importMusicSheet:
+            "粘贴网易云或QQ音乐歌单链接。网易云直接导入；QQ音乐会自动匹配到网易云歌曲。"
+    },
 
 
     /*
-     * ==========================
-     * 通用链接识别失败
-     * ==========================
+     * ============================================
+     * 原 Audiomack 搜索
+     * ============================================
      */
 
-    throw new Error(
-      '暂不支持这个链接。请粘贴网易云或QQ音乐歌单链接。'
-    );
-  }
+    async search(
+        query,
+        page,
+        type
+    ) {
+
+        if (
+            type ===
+            "music"
+        ) {
+
+            return await searchMusic(
+                query,
+                page
+            );
+
+        } else if (
+            type ===
+            "album"
+        ) {
+
+            return await searchAlbum(
+                query,
+                page
+            );
+
+        } else if (
+            type ===
+            "sheet"
+        ) {
+
+            return await searchMusicSheet(
+                query,
+                page
+            );
+
+        } else if (
+            type ===
+            "artist"
+        ) {
+
+            return await searchArtist(
+                query,
+                page
+            );
+        }
+    },
+
+
+    /*
+     * ============================================
+     * 原 Audiomack 播放
+     * ============================================
+     */
+
+    getMediaSource,
+
+
+    /*
+     * 原 Audiomack 专辑
+     */
+
+    getAlbumInfo,
+
+
+    /*
+     * 原 Audiomack 歌单
+     */
+
+    getMusicSheetInfo,
+
+
+    /*
+     * 原 Audiomack 作者作品
+     */
+
+    getArtistWorks,
+
+
+    /*
+     * 原 Audiomack 推荐
+     */
+
+    getRecommendSheetTags,
+
+    getRecommendSheetsByTag,
+
+    getTopLists,
+
+    getTopListDetail,
+
+
+    /*
+     * ============================================
+     * 新增：外部歌单导入
+     * ============================================
+     */
+
+    async importMusicSheet(
+        urlLike
+    ) {
+
+        const url =
+            String(
+                urlLike ||
+                ""
+            ).trim();
+
+        if (!url) {
+
+            throw new Error(
+                "请输入歌单链接"
+            );
+        }
+
+        /*
+         * 自动识别平台
+         */
+        const platform =
+            detectImportPlatform(
+                url
+            );
+
+
+        /*
+         * 网易云
+         */
+        if (
+            platform ===
+            "netease"
+        ) {
+
+            const songs =
+                await importNeteasePlaylist(
+                    url
+                );
+
+            return deduplicateImportedSongs(
+                songs
+            );
+        }
+
+
+        /*
+         * QQ音乐
+         */
+        if (
+            platform ===
+            "qq"
+        ) {
+
+            const songs =
+                await importQQPlaylist(
+                    url
+                );
+
+            return deduplicateImportedSongs(
+                songs
+            );
+        }
+
+
+        /*
+         * 未知平台
+         */
+        throw new Error(
+            "暂不支持此歌单链接，请粘贴网易云或QQ音乐歌单链接。"
+        );
+    }
 };
