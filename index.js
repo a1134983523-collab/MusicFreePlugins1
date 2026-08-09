@@ -73,45 +73,8 @@ function convertSong(song) {
       ? Math.floor(song.dt / 1000)
       : 0,
 
-    neteaseId: String(song.id),
+    neteaseId: String(song.id)
   };
-}
-
-function splitQuery(query) {
-  return String(query || '')
-    .trim()
-    .split(/\s+/)
-    .map(function (x) {
-      return x.trim();
-    })
-    .filter(Boolean);
-}
-
-function isSpecial(song) {
-  const text = (
-    String(song.title || '') +
-    ' ' +
-    String(song.album || '')
-  ).toLowerCase();
-
-  const words = [
-    'live',
-    '现场',
-    '演唱会',
-    'remix',
-    '混音',
-    'dj',
-    'demo',
-    '伴奏',
-    'instrumental',
-    '纯音乐',
-    '翻唱',
-    'cover'
-  ];
-
-  return words.some(function (word) {
-    return text.indexOf(word) !== -1;
-  });
 }
 
 function scoreSong(song, query) {
@@ -142,20 +105,19 @@ function scoreSong(song, query) {
   if (album === q) {
     score += 2000;
   } else if (album.indexOf(q) !== -1) {
-    score += 800;
+    score += 500;
   }
 
-  const parts = splitQuery(query);
+  const parts = String(query)
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
 
   if (parts.length > 1) {
     let matched = 0;
 
     parts.forEach(function (part) {
       const p = normalize(part);
-
-      if (!p) {
-        return;
-      }
 
       if (title.indexOf(p) !== -1) {
         score += 2500;
@@ -172,19 +134,23 @@ function scoreSong(song, query) {
     if (matched === parts.length) {
       score += 6000;
     }
+  }
 
-    if (matched === 0) {
-      score -= 10000;
+  const special =
+    'live 现场 remix 混音 dj demo 伴奏 instrumental 纯音乐 翻唱 cover'
+      .split(' ');
+
+  const text = (
+    String(song.title || '') +
+    ' ' +
+    String(song.album || '')
+  ).toLowerCase();
+
+  special.forEach(function (word) {
+    if (text.indexOf(word) !== -1) {
+      score -= 1000;
     }
-  }
-
-  if (isSpecial(song)) {
-    score -= 1200;
-  }
-
-  if (song.artwork) {
-    score += 50;
-  }
+  });
 
   return score;
 }
@@ -243,19 +209,21 @@ function emptyResult() {
 }
 
 module.exports = {
+
   platform: PLATFORM,
 
-  version: '6.0.0',
+  version: '7.0.0',
 
   author: 'a1134983523-collab',
 
   description:
-    '网易云音乐搜索、歌词及公开可访问播放源',
+    '网易云音乐搜索、歌词及公开播放地址',
 
   srcUrl:
     'https://raw.githubusercontent.com/a1134983523-collab/MusicFreePlugins1/main/index.js',
 
   async search(query, page, type) {
+
     if (!query) {
       return emptyResult();
     }
@@ -301,15 +269,14 @@ module.exports = {
         query
       );
 
-      songs = songs.slice(0, 30);
-
       return {
-        isEnd: songs.length < 30,
-        data: songs
+        isEnd: songs.length < 50,
+        data: songs.slice(0, 30)
       };
+
     } catch (error) {
       console.log(
-        '[网易云] 搜索失败:',
+        '[网易云] 搜索失败',
         error && error.message
           ? error.message
           : error
@@ -319,7 +286,17 @@ module.exports = {
     }
   },
 
+  /*
+   * 播放地址
+   *
+   * 优先：
+   * /song/url/v1
+   *
+   * 备用：
+   * /song/url
+   */
   async getMediaSource(musicItem) {
+
     const id =
       musicItem.neteaseId ||
       musicItem.id;
@@ -328,55 +305,108 @@ module.exports = {
       return null;
     }
 
+    /*
+     * 第一种：
+     * 新版接口
+     */
     try {
-      /*
-       * 使用网易云新版播放地址接口。
-       *
-       * standard = 标准音质
-       */
-      const response = await axios.get(
-        API + '/song/url/v1',
-        {
-          params: {
-            id: id,
-            level: 'standard'
-          },
-          timeout: 20000
-        }
-      );
+      const response =
+        await axios.get(
+          API + '/song/url/v1',
+          {
+            params: {
+              id: id,
+              level: 'standard'
+            },
+            timeout: 15000
+          }
+        );
 
-      const result = response.data;
+      const result =
+        response.data;
 
       if (
-        !result ||
-        !Array.isArray(result.data) ||
-        result.data.length === 0
+        result &&
+        Array.isArray(result.data)
       ) {
-        return null;
+
+        const item =
+          result.data.find(function (x) {
+            return x && x.url;
+          });
+
+        if (item && item.url) {
+          return {
+            url: item.url
+          };
+        }
       }
 
-      const item = result.data[0];
-
-      if (!item || !item.url) {
-        return null;
-      }
-
-      return {
-        url: item.url
-      };
     } catch (error) {
       console.log(
-        '[网易云] 获取播放地址失败:',
-        error && error.message
-          ? error.message
-          : error
+        '[网易云] v1 播放地址失败'
       );
-
-      return null;
     }
+
+    /*
+     * 第二种：
+     * 旧版接口
+     */
+    try {
+      const response =
+        await axios.get(
+          API + '/song/url',
+          {
+            params: {
+              id: id
+            },
+            timeout: 15000
+          }
+        );
+
+      const result =
+        response.data;
+
+      if (
+        result &&
+        Array.isArray(result.data)
+      ) {
+
+        const item =
+          result.data.find(function (x) {
+            return x && x.url;
+          });
+
+        if (item && item.url) {
+          return {
+            url: item.url
+          };
+        }
+      }
+
+      if (
+        result &&
+        result.url
+      ) {
+        return {
+          url: result.url
+        };
+      }
+
+    } catch (error) {
+      console.log(
+        '[网易云] 旧版播放地址失败'
+      );
+    }
+
+    /*
+     * 两个接口都没有公开播放地址。
+     */
+    return null;
   },
 
   async getLyric(musicItem) {
+
     const id =
       musicItem.neteaseId ||
       musicItem.id;
@@ -386,17 +416,20 @@ module.exports = {
     }
 
     try {
-      const response = await axios.get(
-        API + '/song/lyric',
-        {
-          params: {
-            id: id
-          },
-          timeout: 20000
-        }
-      );
 
-      const result = response.data;
+      const response =
+        await axios.get(
+          API + '/song/lyric',
+          {
+            params: {
+              id: id
+            },
+            timeout: 15000
+          }
+        );
+
+      const result =
+        response.data;
 
       if (
         !result ||
@@ -407,7 +440,8 @@ module.exports = {
       }
 
       return {
-        rawLrc: result.lrc.lyric,
+        rawLrc:
+          result.lrc.lyric,
 
         translation:
           result.tlyric &&
@@ -415,12 +449,11 @@ module.exports = {
             ? result.tlyric.lyric
             : undefined
       };
+
     } catch (error) {
+
       console.log(
-        '[网易云] 获取歌词失败:',
-        error && error.message
-          ? error.message
-          : error
+        '[网易云] 歌词获取失败'
       );
 
       return null;
