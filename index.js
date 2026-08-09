@@ -1,105 +1,89 @@
 /**
- * MusicFree Multi-Source
+ * MusicFree 多平台音乐插件
  * MusicFree 0.6.2
  *
- * 网易云 / QQ音乐 / 酷狗 / 酷我 / 咪咕
+ * 平台：
+ * 网易云音乐
+ * QQ音乐
+ * 酷狗音乐
+ * 酷我音乐
+ * 咪咕音乐
  *
- * 说明：
- * 这里只使用公开可访问的数据。
- * 不绕过 VIP、付费限制、登录验证或 DRM。
+ * 只处理公开、合法可访问的数据。
  */
 
-const PLATFORMS = {
-  netease: {
+const PLATFORMS = [
+  {
+    id: 'netease',
     name: '网易云音乐',
-    enabled: true,
   },
-
-  qq: {
+  {
+    id: 'qq',
     name: 'QQ音乐',
-    enabled: true,
   },
-
-  kugou: {
+  {
+    id: 'kugou',
     name: '酷狗音乐',
-    enabled: true,
   },
-
-  kuwo: {
+  {
+    id: 'kuwo',
     name: '酷我音乐',
-    enabled: true,
   },
-
-  migu: {
+  {
+    id: 'migu',
     name: '咪咕音乐',
-    enabled: true,
   },
-};
+];
 
 /**
- * 统一歌曲对象
+ * 网络请求
  */
-function music({
+async function httpGet(url, params = {}) {
+  const response = await axios.get(url, {
+    params,
+    timeout: 15000,
+  });
+
+  return response.data;
+}
+
+/**
+ * 标准化歌曲
+ */
+function createMusic({
+  platform,
   id,
   title,
   artist,
   album,
-  cover,
+  artwork,
   url,
   lyric,
-  platform,
 }) {
   return {
-    id: String(id),
+    id: `${platform}:${id}`,
     title: title || '未知歌曲',
     artist: artist || '未知歌手',
     album: album || '',
-    artwork: cover || '',
+    artwork: artwork || '',
     url: url || '',
     lyric: lyric || '',
-    platform: platform || '',
+    platform,
   };
-}
-
-/**
- * 根据平台名称生成唯一 ID
- */
-function makeId(platform, id) {
-  return `${platform}:${id}`;
-}
-
-/**
- * 网络请求封装
- */
-async function request(url, options = {}) {
-  if (typeof axios !== 'undefined') {
-    const response = await axios({
-      url,
-      method: options.method || 'GET',
-      params: options.params,
-      data: options.data,
-      headers: options.headers,
-      timeout: 15000,
-    });
-
-    return response.data;
-  }
-
-  throw new Error('当前 MusicFree 环境没有可用的网络请求模块');
 }
 
 /**
  * 网易云
  *
- * 这里暂时不硬编码第三方破解 API。
- * 后续接入经过确认的公开接口。
+ * 播放地址不在这里伪造。
+ * 只有获得合法公开地址时才填写 url。
  */
 async function searchNetease(keyword, page) {
   return [];
 }
 
 /**
- * QQ 音乐
+ * QQ音乐
  */
 async function searchQQ(keyword, page) {
   return [];
@@ -136,7 +120,7 @@ async function search(keyword, page = 1, type = 'music') {
 
   const results = [];
 
-  const tasks = [
+  const sources = [
     ['netease', searchNetease],
     ['qq', searchQQ],
     ['kugou', searchKugou],
@@ -144,20 +128,16 @@ async function search(keyword, page = 1, type = 'music') {
     ['migu', searchMigu],
   ];
 
-  for (const [platform, fn] of tasks) {
+  for (const [platform, handler] of sources) {
     try {
-      if (!PLATFORMS[platform].enabled) {
-        continue;
-      }
+      const items = await handler(keyword, page);
 
-      const data = await fn(keyword, page);
-
-      if (Array.isArray(data)) {
-        results.push(...data);
+      if (Array.isArray(items)) {
+        results.push(...items);
       }
     } catch (error) {
       console.log(
-        `[MusicFree] ${PLATFORMS[platform].name} 搜索失败`,
+        `[MusicFree] ${platform} 搜索失败`,
         error
       );
     }
@@ -167,7 +147,7 @@ async function search(keyword, page = 1, type = 'music') {
 }
 
 /**
- * 获取播放地址
+ * 播放
  */
 async function getMediaSource(musicItem) {
   if (!musicItem) {
@@ -176,7 +156,7 @@ async function getMediaSource(musicItem) {
 
   if (!musicItem.url) {
     throw new Error(
-      `${musicItem.platform || '当前音源'}没有公开可用的播放地址`
+      '该歌曲目前没有可公开访问的播放地址'
     );
   }
 
@@ -186,7 +166,7 @@ async function getMediaSource(musicItem) {
 }
 
 /**
- * 获取歌词
+ * 歌词
  */
 async function getLyric(musicItem) {
   if (!musicItem) {
@@ -197,10 +177,9 @@ async function getLyric(musicItem) {
 }
 
 /**
- * 导入歌单
+ * 歌单导入
  *
- * 当前先支持将标准歌曲数组交给 MusicFree。
- * 各平台 URL 解析器后续逐个加入。
+ * 各平台歌单解析器将在后续版本逐个平台加入。
  */
 async function getMusicSheetInfo(url) {
   if (!url) {
@@ -211,22 +190,21 @@ async function getMusicSheetInfo(url) {
 }
 
 /**
- * 插件导出
+ * 插件信息
  */
 module.exports = {
-  platform: '多平台音乐聚合',
+  platform: '多平台音乐',
 
-  version: '1.0.0',
+  version: '1.1.0',
 
   author: 'a1134983523-collab',
 
   description: `
-支持网易云音乐、QQ音乐、酷狗音乐、酷我音乐、咪咕音乐。
+网易云音乐 / QQ音乐 / 酷狗 / 酷我 / 咪咕
 
-当前版本仅使用公开可访问的数据，
+公开数据聚合插件。
+
 不绕过VIP、付费限制、登录验证或DRM。
-
-后续逐个平台加入公开搜索、歌词、歌单和播放地址。
 `,
 
   srcUrl:
