@@ -1,13 +1,30 @@
 const axios = require('axios');
 
-const API = 'https://www.cyanyun.com/api';
-const PLATFORM = '网易云音乐';
+/*
+ * MusicFree
+ * 外部歌单导入 V1
+ *
+ * 支持：
+ * 1. 网易云音乐歌单
+ * 2. QQ音乐歌单
+ * 3. 自动识别平台
+ * 4. QQ歌曲自动匹配网易云
+ *
+ * MusicFree 0.6.x
+ */
 
-const TIMEOUT = 8000;
+const NETEASE_API =
+  'https://music.163.com';
 
-/* =========================
+const QQ_API =
+  'https://c.y.qq.com';
+
+const TIMEOUT = 10000;
+
+
+/* =========================================================
  * 基础工具
- * ========================= */
+ * ========================================================= */
 
 function text(value) {
   return String(value || '').trim();
@@ -21,8 +38,24 @@ function normalize(value) {
     .replace(/[·•・,，.。!！?？:：;；/\\|_-]/g, '');
 }
 
-function getArtists(song) {
-  if (Array.isArray(song.ar)) {
+function sleep(ms) {
+  return new Promise(function (resolve) {
+    setTimeout(resolve, ms);
+  });
+}
+
+
+/* =========================================================
+ * 歌手处理
+ * ========================================================= */
+
+function getNeteaseArtists(song) {
+
+  if (
+    song &&
+    Array.isArray(song.ar)
+  ) {
+
     return song.ar
       .map(function (item) {
         return item && item.name
@@ -33,7 +66,11 @@ function getArtists(song) {
       .join(' / ');
   }
 
-  if (Array.isArray(song.artists)) {
+  if (
+    song &&
+    Array.isArray(song.artists)
+  ) {
+
     return song.artists
       .map(function (item) {
         return item && item.name
@@ -47,796 +84,987 @@ function getArtists(song) {
   return '';
 }
 
-function getAlbum(song) {
+
+/* =========================================================
+ * 平台识别
+ * ========================================================= */
+
+function detectPlatform(url) {
+
+  const value =
+    text(url).toLowerCase();
+
+  /*
+   * 网易云
+   */
   if (
-    song.al &&
-    song.al.name
+    value.includes('music.163.com') ||
+    value.includes('163cn.tv')
   ) {
-    return song.al.name;
-  }
-
-  if (
-    song.album &&
-    song.album.name
-  ) {
-    return song.album.name;
-  }
-
-  return '';
-}
-
-function getArtwork(song) {
-  if (
-    song.al &&
-    song.al.picUrl
-  ) {
-    return song.al.picUrl;
-  }
-
-  if (
-    song.album &&
-    song.album.picUrl
-  ) {
-    return song.album.picUrl;
-  }
-
-  return '';
-}
-
-/* =========================
- * 版本判断
- * ========================= */
-
-function getVersionText(song) {
-  return (
-    text(song.name) +
-    ' ' +
-    getAlbum(song)
-  ).toLowerCase();
-}
-
-function isLive(song) {
-  const s = getVersionText(song);
-
-  return (
-    s.includes('live') ||
-    s.includes('现场') ||
-    s.includes('演唱会')
-  );
-}
-
-function isRemix(song) {
-  const s = getVersionText(song);
-
-  return (
-    s.includes('remix') ||
-    s.includes('混音') ||
-    s.includes('重混')
-  );
-}
-
-function isDJ(song) {
-  const s = getVersionText(song);
-
-  return (
-    s.includes('dj') ||
-    s.includes('电音')
-  );
-}
-
-function isInstrumental(song) {
-  const s = getVersionText(song);
-
-  return (
-    s.includes('伴奏') ||
-    s.includes('instrumental') ||
-    s.includes('纯音乐')
-  );
-}
-
-function isCover(song) {
-  const s = getVersionText(song);
-
-  return (
-    s.includes('翻唱') ||
-    s.includes('cover')
-  );
-}
-
-/* =========================
- * 搜索评分
- * ========================= */
-
-function scoreSong(song, keyword) {
-  const q = normalize(keyword);
-
-  const title = normalize(song.title);
-  const artist = normalize(song.artist);
-  const album = normalize(song.album);
-
-  if (!q) {
-    return 0;
-  }
-
-  let score = 0;
-
-  /* 歌名完全匹配 */
-  if (title === q) {
-    score += 20000;
-  }
-
-  /* 歌名包含 */
-  else if (title.includes(q)) {
-    score += 10000;
-  }
-
-  /* 歌手完全匹配 */
-  if (artist === q) {
-    score += 7000;
-  }
-
-  /* 歌手包含 */
-  else if (artist.includes(q)) {
-    score += 4000;
-  }
-
-  /* 专辑 */
-  if (album === q) {
-    score += 2000;
-  }
-
-  else if (album.includes(q)) {
-    score += 500;
+    return 'netease';
   }
 
   /*
-   * 多关键词：
-   *
-   * 周杰伦 七里香
+   * QQ音乐
    */
-  const words = text(keyword)
-    .split(/\s+/)
-    .filter(Boolean);
-
-  if (words.length > 1) {
-
-    let matched = 0;
-
-    words.forEach(function (word) {
-
-      const w = normalize(word);
-
-      if (!w) {
-        return;
-      }
-
-      if (title.includes(w)) {
-        score += 3500;
-        matched++;
-      }
-
-      else if (artist.includes(w)) {
-        score += 3500;
-        matched++;
-      }
-
-      else if (album.includes(w)) {
-        score += 500;
-        matched++;
-      }
-    });
-
-    if (matched === words.length) {
-      score += 10000;
-    }
-
-    else if (matched === 0) {
-      score -= 20000;
-    }
+  if (
+    value.includes('qq.com') ||
+    value.includes('y.qq.com') ||
+    value.includes('i.y.qq.com')
+  ) {
+    return 'qq';
   }
 
-  /*
-   * 原版优先。
-   */
-  if (isLive(song)) {
-    score -= 3500;
-  }
-
-  if (isRemix(song)) {
-    score -= 3500;
-  }
-
-  if (isDJ(song)) {
-    score -= 4000;
-  }
-
-  if (isInstrumental(song)) {
-    score -= 3500;
-  }
-
-  if (isCover(song)) {
-    score -= 3000;
-  }
-
-  /*
-   * 有专辑封面稍微加分。
-   */
-  if (song.artwork) {
-    score += 100;
-  }
-
-  return score;
+  return null;
 }
 
-/* =========================
- * 转换 MusicFree 歌曲
- * ========================= */
 
-function convertSong(song) {
+/* =========================================================
+ * 网易云歌单 ID
+ * ========================================================= */
+
+function parseNeteasePlaylistId(url) {
+
+  const value =
+    text(url);
+
+  let match;
+
+  /*
+   * playlist?id=123
+   */
+  match =
+    value.match(
+      /[?&]id=(\d+)/i
+    );
+
+  if (match) {
+    return match[1];
+  }
+
+  /*
+   * playlist/123
+   */
+  match =
+    value.match(
+      /playlist[\/_-](\d+)/i
+    );
+
+  if (match) {
+    return match[1];
+  }
+
+  /*
+   * #/playlist?id=123
+   */
+  match =
+    value.match(
+      /playlist.*?[?&]id=(\d+)/i
+    );
+
+  if (match) {
+    return match[1];
+  }
+
+  return null;
+}
+
+
+/* =========================================================
+ * QQ歌单 ID
+ * ========================================================= */
+
+function parseQQPlaylistId(url) {
+
+  const value =
+    text(url);
+
+  let match;
+
+  /*
+   * disstid=123
+   */
+  match =
+    value.match(
+      /[?&]disstid=(\d+)/i
+    );
+
+  if (match) {
+    return match[1];
+  }
+
+  /*
+   * playlist/123
+   */
+  match =
+    value.match(
+      /playlist[\/_-](\d+)/i
+    );
+
+  if (match) {
+    return match[1];
+  }
+
+  /*
+   * detail/123
+   */
+  match =
+    value.match(
+      /detail[\/_-](\d+)/i
+    );
+
+  if (match) {
+    return match[1];
+  }
+
+  /*
+   * id=123
+   */
+  match =
+    value.match(
+      /[?&]id=(\d+)/i
+    );
+
+  if (match) {
+    return match[1];
+  }
+
+  return null;
+}
+
+
+/* =========================================================
+ * 网易云歌曲转换
+ * ========================================================= */
+
+function convertNeteaseSong(song) {
 
   if (
     !song ||
-    song.id === undefined ||
-    song.id === null
+    song.id == null
   ) {
     return null;
   }
 
-  /*
-   * 这里非常重要：
-   *
-   * id 永远使用网易云原始 ID。
-   *
-   * 不再创建 neteaseId
-   * 作为第二套 ID。
-   */
-  const item = {
+  return {
 
-    id: String(song.id),
-
-    platform: PLATFORM,
+    id:
+      String(song.id),
 
     title:
       text(song.name),
 
     artist:
-      getArtists(song),
+      getNeteaseArtists(song),
 
     album:
-      getAlbum(song),
+      song.al &&
+      song.al.name
+        ? song.al.name
+        : '',
 
     artwork:
-      getArtwork(song),
+      song.al &&
+      song.al.picUrl
+        ? song.al.picUrl
+        : '',
 
     duration:
       song.dt
         ? Math.floor(
             song.dt / 1000
           )
-        : undefined
+        : undefined,
+
+    platform:
+      '网易云音乐'
   };
-
-  /*
-   * 如果接口直接给 URL，
-   * 保存为默认音源。
-   */
-  if (
-    typeof song.url === 'string' &&
-    song.url
-  ) {
-    item.url = song.url;
-  }
-
-  /*
-   * 保存网易云歌曲状态。
-   */
-  if (
-    song.fee !== undefined
-  ) {
-    item.fee = song.fee;
-  }
-
-  if (
-    song.privilege
-  ) {
-    item.privilege =
-      song.privilege;
-  }
-
-  return item;
 }
 
-/* =========================
- * 去重
- * ========================= */
 
-function deduplicate(list) {
+/* =========================================================
+ * 网易云歌单
+ * ========================================================= */
 
-  const map = {};
-  const result = [];
+async function fetchNeteasePlaylist(
+  playlistId
+) {
 
-  list.forEach(function (song) {
+  const response =
+    await axios.get(
+      NETEASE_API +
+        '/api/playlist/detail',
+      {
+        params: {
+          id:
+            playlistId
+        },
+
+        timeout:
+          TIMEOUT,
+
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0'
+        }
+      }
+    );
+
+  const result =
+    response.data;
+
+  if (
+    !result ||
+    !result.result
+  ) {
+    throw new Error(
+      '网易云歌单不存在或无法访问'
+    );
+  }
+
+  const playlist =
+    result.result;
+
+  const tracks =
+    Array.isArray(
+      playlist.tracks
+    )
+      ? playlist.tracks
+      : [];
+
+  const songs =
+    tracks
+      .map(
+        convertNeteaseSong
+      )
+      .filter(Boolean);
+
+  return {
+
+    name:
+      playlist.name ||
+      '网易云歌单',
+
+    artwork:
+      playlist.coverImgUrl ||
+      '',
+
+    songs:
+      songs
+  };
+}
+
+
+/* =========================================================
+ * QQ歌单获取
+ * ========================================================= */
+
+async function fetchQQPlaylist(
+  playlistId
+) {
+
+  /*
+   * QQ公开歌单接口。
+   *
+   * 这个接口可能随QQ页面改版变化。
+   */
+
+  const response =
+    await axios.get(
+      QQ_API +
+        '/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg',
+      {
+
+        params: {
+
+          type:
+            1,
+
+          json:
+            1,
+
+          utf8:
+            1,
+
+          onlysong:
+            0,
+
+          disstid:
+            playlistId,
+
+          format:
+            'json',
+
+          g_tk:
+            5381
+        },
+
+        timeout:
+          TIMEOUT,
+
+        headers: {
+
+          Referer:
+            'https://y.qq.com/',
+
+          'User-Agent':
+            'Mozilla/5.0'
+        },
+
+        responseType:
+          'text'
+      }
+    );
+
+  let data =
+    response.data;
+
+  /*
+   * QQ接口有时会返回：
+   *
+   * MusicJsonCallback(...)
+   */
+  if (
+    typeof data === 'string'
+  ) {
+
+    data =
+      data
+        .replace(
+          /^MusicJsonCallback\(/,
+          ''
+        )
+        .replace(
+          /\);?\s*$/,
+          ''
+        );
+
+    try {
+      data =
+        JSON.parse(data);
+    } catch (e) {
+      throw new Error(
+        'QQ歌单数据解析失败'
+      );
+    }
+  }
+
+  if (
+    !data
+  ) {
+    throw new Error(
+      'QQ歌单没有返回数据'
+    );
+  }
+
+  /*
+   * 兼容不同返回结构。
+   */
+
+  let cdlist =
+    data.cdlist;
+
+  if (
+    !Array.isArray(cdlist) ||
+    !cdlist.length
+  ) {
+
+    if (
+      data.cdlist &&
+      typeof data.cdlist === 'object'
+    ) {
+
+      cdlist = [
+        data.cdlist
+      ];
+    }
+  }
+
+  if (
+    !Array.isArray(cdlist) ||
+    !cdlist.length
+  ) {
+
+    throw new Error(
+      'QQ歌单为空或接口不可访问'
+    );
+  }
+
+  const playlist =
+    cdlist[0];
+
+  const list =
+    Array.isArray(
+      playlist.songlist
+    )
+      ? playlist.songlist
+      : [];
+
+  return {
+
+    name:
+      playlist.dissname ||
+      playlist.title ||
+      'QQ音乐歌单',
+
+    artwork:
+      playlist.logo ||
+      '',
+
+    songs:
+      list
+        .map(function (song) {
+
+          const singers =
+            Array.isArray(
+              song.singer
+            )
+              ? song.singer
+                  .map(function (item) {
+                    return item &&
+                      item.name
+                      ? item.name
+                      : '';
+                  })
+                  .filter(Boolean)
+                  .join(' / ')
+              : '';
+
+          return {
+
+            mid:
+              text(
+                song.mid
+              ),
+
+            title:
+              text(
+                song.songname
+              ),
+
+            artist:
+              singers,
+
+            album:
+              song.album &&
+              song.album.name
+                ? song.album.name
+                : '',
+
+            artwork:
+              song.album &&
+              song.album.mid
+                ? (
+                    'https://y.gtimg.cn/music/photo_new/T002R300x300M000' +
+                    song.album.mid +
+                    '.jpg'
+                  )
+                : ''
+          };
+        })
+        .filter(function (song) {
+          return (
+            song.title &&
+            song.artist
+          );
+        })
+  };
+}
+
+
+/* =========================================================
+ * 网易云搜索
+ *
+ * 用于把 QQ歌曲自动匹配成网易云歌曲。
+ * ========================================================= */
+
+async function searchNeteaseSong(
+  title,
+  artist
+) {
+
+  const keyword =
+    text(title) +
+    ' ' +
+    text(artist);
+
+  try {
+
+    const response =
+      await axios.get(
+        NETEASE_API +
+          '/api/search/get/web',
+        {
+
+          params: {
+
+            s:
+              keyword,
+
+            type:
+              1,
+
+            offset:
+              0,
+
+            total:
+              true,
+
+            limit:
+              20
+          },
+
+          timeout:
+            TIMEOUT,
+
+          headers: {
+
+            'User-Agent':
+              'Mozilla/5.0'
+          }
+        }
+      );
+
+    const result =
+      response.data;
+
+    if (
+      !result ||
+      !result.result ||
+      !Array.isArray(
+        result.result.songs
+      )
+    ) {
+      return null;
+    }
+
+    const songs =
+      result.result.songs;
+
+    const wantedTitle =
+      normalize(title);
+
+    const wantedArtist =
+      normalize(artist);
+
+    let best =
+      null;
+
+    let bestScore =
+      -Infinity;
+
+    songs.forEach(function (song) {
+
+      const songTitle =
+        normalize(song.name);
+
+      const songArtist =
+        normalize(
+          getNeteaseArtists(song)
+        );
+
+      let score =
+        0;
+
+      /*
+       * 歌名完全匹配
+       */
+      if (
+        songTitle ===
+        wantedTitle
+      ) {
+        score +=
+          10000;
+      }
+
+      /*
+       * 歌名包含
+       */
+      else if (
+        songTitle.includes(
+          wantedTitle
+        ) ||
+        wantedTitle.includes(
+          songTitle
+        )
+      ) {
+        score +=
+          5000;
+      }
+
+      /*
+       * 歌手完全匹配
+       */
+      if (
+        songArtist ===
+        wantedArtist
+      ) {
+        score +=
+          10000;
+      }
+
+      /*
+       * 歌手包含
+       */
+      else if (
+        songArtist.includes(
+          wantedArtist
+        ) ||
+        wantedArtist.includes(
+          songArtist
+        )
+      ) {
+        score +=
+          5000;
+      }
+
+      /*
+       * 双方都命中，
+       * 给巨大奖励。
+       */
+      if (
+        songTitle ===
+          wantedTitle &&
+        songArtist.includes(
+          wantedArtist
+        )
+      ) {
+        score +=
+          15000;
+      }
+
+      /*
+       * 排除明显不同版本。
+       */
+      const version =
+        (
+          text(song.name) +
+          ' ' +
+          text(
+            song.al &&
+            song.al.name
+          )
+        ).toLowerCase();
+
+      if (
+        version.includes(
+          'live'
+        ) ||
+        version.includes(
+          '现场'
+        ) ||
+        version.includes(
+          'remix'
+        ) ||
+        version.includes(
+          'dj'
+        ) ||
+        version.includes(
+          '伴奏'
+        ) ||
+        version.includes(
+          '翻唱'
+        )
+      ) {
+        score -=
+          3000;
+      }
+
+      if (
+        score >
+        bestScore
+      ) {
+
+        bestScore =
+          score;
+
+        best =
+          song;
+      }
+    });
 
     /*
-     * 优先使用网易云 ID。
+     * 最低匹配分。
+     *
+     * 防止：
+     * QQ歌单一首歌
+     * 被错误匹配成完全不同的网易云歌曲。
      */
+    if (
+      !best ||
+      bestScore < 10000
+    ) {
+      return null;
+    }
+
+    return convertNeteaseSong(
+      best
+    );
+
+  } catch (error) {
+
+    console.log(
+      '[QQ → 网易云] 匹配失败:',
+      error &&
+      error.message
+        ? error.message
+        : error
+    );
+
+    return null;
+  }
+}
+
+
+/* =========================================================
+ * 批量匹配
+ *
+ * 不一次性打爆网易云接口。
+ * 每首之间稍微等待。
+ * ========================================================= */
+
+async function matchQQSongs(
+  songs
+) {
+
+  const result =
+    [];
+
+  for (
+    let i = 0;
+    i < songs.length;
+    i++
+  ) {
+
+    const song =
+      songs[i];
+
+    try {
+
+      const matched =
+        await searchNeteaseSong(
+          song.title,
+          song.artist
+        );
+
+      if (
+        matched
+      ) {
+
+        result.push(
+          matched
+        );
+      }
+
+    } catch (e) {
+
+      console.log(
+        '[匹配失败]',
+        song.title
+      );
+    }
+
+    /*
+     * 避免连续请求过快。
+     */
+    if (
+      i <
+      songs.length - 1
+    ) {
+      await sleep(120);
+    }
+  }
+
+  return result;
+}
+
+
+/* =========================================================
+ * 去重
+ * ========================================================= */
+
+function deduplicate(
+  songs
+) {
+
+  const map =
+    {};
+
+  const result =
+    [];
+
+  songs.forEach(function (song) {
+
     const key =
-      String(song.id);
+      String(
+        song.id
+      );
 
-    if (!key) {
+    if (
+      !key ||
+      map[key]
+    ) {
       return;
     }
 
-    if (map[key]) {
-      return;
-    }
+    map[key] =
+      true;
 
-    map[key] = true;
-
-    result.push(song);
+    result.push(
+      song
+    );
   });
 
   return result;
 }
 
-/* =========================
- * 排序
- * ========================= */
 
-function rankSongs(list, keyword) {
-
-  return list
-    .map(function (song, index) {
-
-      return {
-        song: song,
-
-        score:
-          scoreSong(
-            song,
-            keyword
-          ),
-
-        index: index
-      };
-    })
-
-    .sort(function (a, b) {
-
-      if (
-        b.score !== a.score
-      ) {
-        return (
-          b.score -
-          a.score
-        );
-      }
-
-      return (
-        a.index -
-        b.index
-      );
-    })
-
-    .map(function (item) {
-      return item.song;
-    });
-}
-
-/* =========================
- * 空结果
- * ========================= */
-
-function emptyResult() {
-
-  return {
-    isEnd: true,
-    data: []
-  };
-}
-
-/* =========================
- * 播放 URL 提取
- * ========================= */
-
-function extractUrl(response) {
-
-  if (
-    !response ||
-    !response.data
-  ) {
-    return null;
-  }
-
-  const body =
-    response.data;
-
-  /*
-   * 常见：
-   *
-   * {
-   *   data: [
-   *     { url: "..." }
-   *   ]
-   * }
-   */
-  if (
-    Array.isArray(body.data)
-  ) {
-
-    for (
-      let i = 0;
-      i < body.data.length;
-      i++
-    ) {
-
-      const item =
-        body.data[i];
-
-      if (
-        item &&
-        typeof item.url === 'string' &&
-        item.url
-      ) {
-        return item.url;
-      }
-    }
-  }
-
-  /*
-   * 少数接口：
-   *
-   * { url: "..." }
-   */
-  if (
-    typeof body.url === 'string' &&
-    body.url
-  ) {
-    return body.url;
-  }
-
-  return null;
-}
-
-/* =========================
- * 插件
- * ========================= */
+/* =========================================================
+ * MusicFree 插件
+ * ========================================================= */
 
 module.exports = {
 
+  /*
+   * 这里保持网易云平台。
+   *
+   * 因为QQ歌曲最终会自动匹配成网易云歌曲。
+   */
   platform:
-    PLATFORM,
+    '网易云音乐',
 
   version:
-    '9.0.0',
+    '1.0.0',
 
   author:
     'a1134983523-collab',
 
+  appVersion:
+    '>=0.6.0',
+
   description:
-    '网易云音乐精准搜索与公开音源',
+    '网易云/QQ音乐外部歌单导入与自动匹配',
 
-  srcUrl:
-    'https://raw.githubusercontent.com/a1134983523-collab/MusicFreePlugins1/main/index.js',
+  /*
+   * 歌单导入提示。
+   */
+  hints: {
 
-  /* =======================
-   * 搜索
-   * ======================= */
-
-  async search(
-    keyword,
-    page,
-    type
-  ) {
-
-    if (!keyword) {
-      return emptyResult();
-    }
-
-    page =
-      page || 1;
-
-    /*
-     * 只处理歌曲搜索。
-     */
-    if (
-      type &&
-      type !== 'music'
-    ) {
-      return emptyResult();
-    }
-
-    try {
-
-      const response =
-        await axios.get(
-          API + '/search',
-          {
-            params: {
-
-              keywords:
-                keyword,
-
-              limit:
-                50,
-
-              offset:
-                (page - 1) * 50,
-
-              type:
-                1
-            },
-
-            timeout:
-              TIMEOUT
-          }
-        );
-
-      const result =
-        response.data;
-
-      if (
-        !result ||
-        !result.result ||
-        !Array.isArray(
-          result.result.songs
-        )
-      ) {
-        return emptyResult();
-      }
-
-      let songs =
-        result.result.songs
-          .map(convertSong)
-          .filter(Boolean);
-
-      /*
-       * 去重。
-       */
-      songs =
-        deduplicate(songs);
-
-      /*
-       * 精确排序。
-       */
-      songs =
-        rankSongs(
-          songs,
-          keyword
-        );
-
-      /*
-       * 返回 30 首。
-       */
-      songs =
-        songs.slice(
-          0,
-          30
-        );
-
-      return {
-
-        isEnd:
-          songs.length < 30,
-
-        data:
-          songs
-      };
-
-    } catch (error) {
-
-      console.log(
-        '[网易云] 搜索失败:',
-        error &&
-        error.message
-          ? error.message
-          : error
-      );
-
-      return emptyResult();
-    }
+    importMusicSheet:
+      '粘贴网易云或QQ音乐歌单链接，插件会自动识别并导入；QQ音乐歌单会自动匹配到网易云。'
   },
 
-  /* =======================
-   * 播放
-   * ======================= */
 
-  async getMediaSource(
-    musicItem
+  /* =======================================================
+   * 导入歌单
+   * ======================================================= */
+
+  async importMusicSheet(
+    urlLike
   ) {
 
-    if (!musicItem) {
-      return null;
+    const url =
+      text(urlLike);
+
+    if (!url) {
+      return [];
     }
 
     /*
-     * 如果搜索结果已经带有
-     * 默认播放地址，优先使用。
+     * 自动识别平台。
      */
+    const platform =
+      detectPlatform(url);
+
     if (
-      typeof musicItem.url === 'string' &&
-      musicItem.url
+      platform ===
+      'netease'
     ) {
 
-      return {
-        url:
-          musicItem.url
-      };
-    }
+      /*
+       * ==========================
+       * 网易云歌单
+       * ==========================
+       */
 
-    /*
-     * 必须使用 MusicFree 的
-     * 原始 id。
-     */
-    const id =
-      musicItem.id;
-
-    if (!id) {
-      return null;
-    }
-
-    /*
-     * 第一优先：
-     *
-     * /song/url/v1
-     */
-    try {
-
-      const response =
-        await axios.get(
-          API +
-            '/song/url/v1',
-          {
-            params: {
-
-              id:
-                String(id),
-
-              level:
-                'standard'
-            },
-
-            timeout:
-              TIMEOUT
-          }
+      const playlistId =
+        parseNeteasePlaylistId(
+          url
         );
 
-      const url =
-        extractUrl(
-          response
+      if (!playlistId) {
+
+        throw new Error(
+          '无法识别网易云歌单 ID'
         );
-
-      if (url) {
-
-        return {
-          url:
-            url
-        };
       }
 
-    } catch (error) {
+      const playlist =
+        await fetchNeteasePlaylist(
+          playlistId
+        );
 
-      console.log(
-        '[网易云] v1 获取失败'
+      /*
+       * 直接返回网易云歌曲。
+       */
+      return deduplicate(
+        playlist.songs
       );
     }
 
-    /*
-     * 第二优先：
-     *
-     * /song/url
-     */
-    try {
 
-      const response =
-        await axios.get(
-          API +
-            '/song/url',
-          {
-            params: {
+    if (
+      platform ===
+      'qq'
+    ) {
 
-              id:
-                String(id)
-            },
+      /*
+       * ==========================
+       * QQ音乐歌单
+       * ==========================
+       */
 
-            timeout:
-              TIMEOUT
-          }
+      const playlistId =
+        parseQQPlaylistId(
+          url
         );
 
-      const url =
-        extractUrl(
-          response
+      if (!playlistId) {
+
+        throw new Error(
+          '无法识别QQ音乐歌单 ID'
         );
-
-      if (url) {
-
-        return {
-          url:
-            url
-        };
       }
 
-    } catch (error) {
+      const playlist =
+        await fetchQQPlaylist(
+          playlistId
+        );
 
-      console.log(
-        '[网易云] url 获取失败'
+      /*
+       * QQ歌曲：
+       *
+       * 自动搜索网易云对应歌曲。
+       */
+      const matched =
+        await matchQQSongs(
+          playlist.songs
+        );
+
+      return deduplicate(
+        matched
       );
     }
 
+
     /*
-     * 没有公开播放地址。
+     * ==========================
+     * 通用链接识别失败
+     * ==========================
      */
-    return null;
-  },
 
-  /* =======================
-   * 歌词
-   * ======================= */
-
-  async getLyric(
-    musicItem
-  ) {
-
-    if (!musicItem) {
-      return null;
-    }
-
-    const id =
-      musicItem.id;
-
-    if (!id) {
-      return null;
-    }
-
-    try {
-
-      const response =
-        await axios.get(
-          API +
-            '/song/lyric',
-          {
-            params: {
-
-              id:
-                String(id)
-            },
-
-            timeout:
-              TIMEOUT
-          }
-        );
-
-      const result =
-        response.data;
-
-      if (
-        !result ||
-        !result.lrc ||
-        !result.lrc.lyric
-      ) {
-        return null;
-      }
-
-      return {
-
-        rawLrc:
-          result.lrc.lyric,
-
-        translation:
-          result.tlyric &&
-          result.tlyric.lyric
-            ? result.tlyric.lyric
-            : undefined
-      };
-
-    } catch (error) {
-
-      console.log(
-        '[网易云] 歌词获取失败'
-      );
-
-      return null;
-    }
+    throw new Error(
+      '暂不支持这个链接。请粘贴网易云或QQ音乐歌单链接。'
+    );
   }
 };
