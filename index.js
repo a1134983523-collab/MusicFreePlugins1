@@ -1,23 +1,21 @@
 const axios = require('axios');
 
 const API = 'https://api.jimsdeng.eu.org';
-
 const PLATFORM = '网易云音乐';
 
-function emptyResult() {
-  return {
-    isEnd: true,
-    data: [],
-  };
+function cleanText(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[《》「」『』【】（）()［］[\]{}<>]/g, ' ')
+    .replace(/[\s_\-—–·•,，.。!！?？:：;；/\\|]/g, '')
+    .trim();
 }
 
-function getArtist(song) {
-  if (!song) return '';
-
+function getArtists(song) {
   if (Array.isArray(song.ar)) {
     return song.ar
-      .map(function (item) {
-        return item && item.name ? item.name : '';
+      .map(function (a) {
+        return a && a.name ? a.name : '';
       })
       .filter(Boolean)
       .join(' / ');
@@ -25,11 +23,35 @@ function getArtist(song) {
 
   if (Array.isArray(song.artists)) {
     return song.artists
-      .map(function (item) {
-        return item && item.name ? item.name : '';
+      .map(function (a) {
+        return a && a.name ? a.name : '';
       })
       .filter(Boolean)
       .join(' / ');
+  }
+
+  return '';
+}
+
+function getAlbum(song) {
+  if (song.al && song.al.name) {
+    return song.al.name;
+  }
+
+  if (song.album && song.album.name) {
+    return song.album.name;
+  }
+
+  return '';
+}
+
+function getArtwork(song) {
+  if (song.al && song.al.picUrl) {
+    return song.al.picUrl;
+  }
+
+  if (song.album && song.album.picUrl) {
+    return song.album.picUrl;
   }
 
   return '';
@@ -40,68 +62,279 @@ function convertSong(song) {
     return null;
   }
 
-  var albumName = '';
-  var artwork = '';
-
-  if (song.al) {
-    albumName = song.al.name || '';
-    artwork = song.al.picUrl || '';
-  }
-
-  if (song.album) {
-    albumName =
-      song.album.name ||
-      albumName;
-
-    artwork =
-      song.album.picUrl ||
-      artwork;
-  }
-
   return {
     id: String(song.id),
     platform: PLATFORM,
     title: song.name || '',
-    artist: getArtist(song),
-    album: albumName,
-    artwork: artwork,
+    artist: getArtists(song),
+    album: getAlbum(song),
+    artwork: getArtwork(song),
     duration: song.dt
       ? Math.floor(song.dt / 1000)
       : 0,
 
-    // 保存网易云 ID，供后面的接口使用
     neteaseId: String(song.id),
+  };
+}
+
+/*
+ * 把查询拆成若干关键词。
+ *
+ * 例如：
+ *
+ * 周杰伦 七里香
+ *
+ * 会得到：
+ *
+ * ["周杰伦", "七里香"]
+ */
+function splitQuery(query) {
+  return String(query || '')
+    .trim()
+    .split(/\s+/)
+    .map(function (x) {
+      return x.trim();
+    })
+    .filter(Boolean);
+}
+
+/*
+ * 搜索评分。
+ *
+ * 分数越高越靠前。
+ */
+function scoreSong(song, query) {
+  var q = cleanText(query);
+
+  var title = cleanText(song.title);
+  var artist = cleanText(song.artist);
+  var album = cleanText(song.album);
+
+  if (!q) {
+    return 0;
+  }
+
+  var score = 0;
+
+  /*
+   * 最高优先级：
+   * 歌名完全等于搜索词
+   */
+  if (title === q) {
+    score += 1000;
+  }
+
+  /*
+   * 歌手完全等于搜索词
+   */
+  if (artist === q) {
+    score += 850;
+  }
+
+  /*
+   * 专辑完全等于搜索词
+   */
+  if (album === q) {
+    score += 700;
+  }
+
+  /*
+   * 歌名包含完整关键词
+   */
+  if (title.indexOf(q) !== -1) {
+    score += 600;
+  }
+
+  /*
+   * 歌手包含完整关键词
+   */
+  if (artist.indexOf(q) !== -1) {
+    score += 500;
+  }
+
+  /*
+   * 专辑包含关键词
+   */
+  if (album.indexOf(q) !== -1) {
+    score += 300;
+  }
+
+  /*
+   * 多关键词评分。
+   *
+   * 例如：
+   * 周杰伦 七里香
+   */
+  var words = splitQuery(query);
+
+  if (words.length > 1) {
+    words.forEach(function (word) {
+      var w = cleanText(word);
+
+      if (!w) {
+        return;
+      }
+
+      if (title.indexOf(w) !== -1) {
+        score += 180;
+      }
+
+      if (artist.indexOf(w) !== -1) {
+        score += 160;
+      }
+
+      if (album.indexOf(w) !== -1) {
+        score += 80;
+      }
+    });
+
+    /*
+     * 如果所有关键词都出现，
+     * 额外奖励。
+     */
+    var allMatched = words.every(
+      function (word) {
+        var w = cleanText(word);
+
+        return (
+          title.indexOf(w) !== -1 ||
+          artist.indexOf(w) !== -1 ||
+          album.indexOf(w) !== -1
+        );
+      }
+    );
+
+    if (allMatched) {
+      score += 500;
+    }
+  }
+
+  /*
+   * 优先正式歌曲。
+   *
+   * 对 live / remix / instrumental / 伴奏等
+   * 不直接删除，只降低排序。
+   */
+  var lowerTitle = String(
+    song.title || ''
+  ).toLowerCase();
+
+  var lowerAlbum = String(
+    song.album || ''
+  ).toLowerCase();
+
+  var specialWords = [
+    'live',
+    '现场',
+    '演唱会',
+    'remix',
+    '混音',
+    'instrumental',
+    '伴奏',
+    '纯音乐',
+    'dj',
+    'demo',
+    '试听',
+  ];
+
+  specialWords.forEach(function (word) {
+    if (
+      lowerTitle.indexOf(word) !== -1 ||
+      lowerAlbum.indexOf(word) !== -1
+    ) {
+      score -= 35;
+    }
+  });
+
+  return score;
+}
+
+/*
+ * 去重。
+ *
+ * 同一首歌可能因为专辑/版本不同
+ * 出现很多重复结果。
+ */
+function removeDuplicates(list) {
+  var map = {};
+  var result = [];
+
+  list.forEach(function (item) {
+    var key =
+      cleanText(item.title) +
+      '|' +
+      cleanText(item.artist);
+
+    if (!key || key === '|') {
+      return;
+    }
+
+    /*
+     * 完全相同的歌只保留第一条。
+     */
+    if (!map[key]) {
+      map[key] = true;
+      result.push(item);
+    }
+  });
+
+  return result;
+}
+
+/*
+ * 根据评分排序。
+ */
+function sortSongs(songs, query) {
+  var scored = songs.map(
+    function (song, index) {
+      return {
+        song: song,
+        score: scoreSong(
+          song,
+          query
+        ),
+        index: index,
+      };
+    }
+  );
+
+  scored.sort(function (a, b) {
+    if (b.score !== a.score) {
+      return b.score - a.score;
+    }
+
+    /*
+     * 分数相同保持网易云原始顺序。
+     */
+    return a.index - b.index;
+  });
+
+  return scored.map(function (x) {
+    return x.song;
+  });
+}
+
+function emptyResult() {
+  return {
+    isEnd: true,
+    data: [],
   };
 }
 
 module.exports = {
   platform: PLATFORM,
 
+  version: '4.0.0',
+
   author: 'a1134983523-collab',
 
-  version: '3.0.0',
+  description:
+    '网易云音乐搜索增强版：关键词匹配、相关性排序、去重。',
 
   srcUrl:
     'https://github.com/a1134983523-collab/MusicFreePlugins1/raw/main/index.js',
 
-  primaryKey: ['id'],
-
-  cacheControl: 'no-cache',
-
-  supportedSearchType: [
-    'music',
-    'sheet',
-    'album',
-    'artist',
-    'lyric',
-  ],
-
-  hints: {
-    importMusicSheet: [
-      '支持网易云音乐歌单链接。',
-      '例如：https://music.163.com/#/playlist?id=123456',
-    ],
-  },
+  cacheControl: 'no-store',
 
   async search(query, page, type) {
     if (!query) {
@@ -111,367 +344,97 @@ module.exports = {
     page = page || 1;
 
     /*
-     * 歌曲搜索
+     * 当前重点优化歌曲搜索。
      */
-    if (type === 'music') {
-      try {
-        var response = await axios.get(
+    if (type !== 'music') {
+      return emptyResult();
+    }
+
+    try {
+      var response =
+        await axios.get(
           API + '/search',
           {
             params: {
               keywords: query,
-              limit: 20,
-              offset: (page - 1) * 20,
+              limit: 50,
+              offset:
+                (page - 1) * 50,
               type: 1,
             },
+
             timeout: 20000,
           }
         );
 
-        var result = response.data;
-
-        if (
-          !result ||
-          !result.result ||
-          !Array.isArray(result.result.songs)
-        ) {
-          return emptyResult();
-        }
-
-        var songs = result.result.songs
-          .map(convertSong)
-          .filter(Boolean);
-
-        return {
-          isEnd: songs.length < 20,
-          data: songs,
-        };
-      } catch (e) {
-        console.log(
-          '[网易云] 搜索失败:',
-          e && e.message
-            ? e.message
-            : e
-        );
-
-        return emptyResult();
-      }
-    }
-
-    /*
-     * 歌单搜索
-     */
-    if (type === 'sheet') {
-      try {
-        var sheetResponse =
-          await axios.get(
-            API + '/search',
-            {
-              params: {
-                keywords: query,
-                limit: 20,
-                offset: (page - 1) * 20,
-                type: 1000,
-              },
-              timeout: 20000,
-            }
-          );
-
-        var sheetResult =
-          sheetResponse.data;
-
-        var playlists =
-          sheetResult &&
-          sheetResult.result &&
-          sheetResult.result.playlists;
-
-        if (!Array.isArray(playlists)) {
-          return emptyResult();
-        }
-
-        return {
-          isEnd: playlists.length < 20,
-
-          data: playlists.map(
-            function (item) {
-              return {
-                id: String(item.id),
-                platform: PLATFORM,
-                title: item.name || '',
-                artist:
-                  item.creator &&
-                  item.creator.nickname
-                    ? item.creator.nickname
-                    : '',
-                artwork:
-                  item.coverImgUrl || '',
-                description:
-                  item.description || '',
-                playCount:
-                  item.playCount || 0,
-              };
-            }
-          ),
-        };
-      } catch (e) {
-        console.log(
-          '[网易云] 歌单搜索失败:',
-          e
-        );
-
-        return emptyResult();
-      }
-    }
-
-    /*
-     * 歌手搜索
-     */
-    if (type === 'artist') {
-      try {
-        var artistResponse =
-          await axios.get(
-            API + '/search',
-            {
-              params: {
-                keywords: query,
-                limit: 20,
-                offset: (page - 1) * 20,
-                type: 100,
-              },
-              timeout: 20000,
-            }
-          );
-
-        var artistResult =
-          artistResponse.data;
-
-        var artists =
-          artistResult &&
-          artistResult.result &&
-          artistResult.result.artists;
-
-        if (!Array.isArray(artists)) {
-          return emptyResult();
-        }
-
-        return {
-          isEnd: artists.length < 20,
-
-          data: artists.map(
-            function (item) {
-              return {
-                id: String(item.id),
-                platform: PLATFORM,
-                name: item.name || '',
-                avatar:
-                  item.picUrl ||
-                  item.img1v1Url ||
-                  '',
-              };
-            }
-          ),
-        };
-      } catch (e) {
-        console.log(
-          '[网易云] 歌手搜索失败:',
-          e
-        );
-
-        return emptyResult();
-      }
-    }
-
-    /*
-     * 专辑搜索
-     */
-    if (type === 'album') {
-      try {
-        var albumResponse =
-          await axios.get(
-            API + '/search',
-            {
-              params: {
-                keywords: query,
-                limit: 20,
-                offset: (page - 1) * 20,
-                type: 10,
-              },
-              timeout: 20000,
-            }
-          );
-
-        var albumResult =
-          albumResponse.data;
-
-        var albums =
-          albumResult &&
-          albumResult.result &&
-          albumResult.result.albums;
-
-        if (!Array.isArray(albums)) {
-          return emptyResult();
-        }
-
-        return {
-          isEnd: albums.length < 20,
-
-          data: albums.map(
-            function (item) {
-              return {
-                id: String(item.id),
-                platform: PLATFORM,
-                title: item.name || '',
-                artist:
-                  item.artist &&
-                  item.artist.name
-                    ? item.artist.name
-                    : '',
-                artwork:
-                  item.picUrl || '',
-                worksNum:
-                  item.size || 0,
-              };
-            }
-          ),
-        };
-      } catch (e) {
-        console.log(
-          '[网易云] 专辑搜索失败:',
-          e
-        );
-
-        return emptyResult();
-      }
-    }
-
-    /*
-     * 歌词搜索
-     *
-     * 网易云歌词搜索结果结构比较复杂，
-     * 这里先通过歌曲搜索得到歌曲。
-     */
-    if (type === 'lyric') {
-      try {
-        var lyricResponse =
-          await axios.get(
-            API + '/search',
-            {
-              params: {
-                keywords: query,
-                limit: 20,
-                offset: (page - 1) * 20,
-                type: 1006,
-              },
-              timeout: 20000,
-            }
-          );
-
-        var lyricResult =
-          lyricResponse.data;
-
-        var lyricSongs =
-          lyricResult &&
-          lyricResult.result &&
-          lyricResult.result.songs;
-
-        if (!Array.isArray(lyricSongs)) {
-          return emptyResult();
-        }
-
-        var lyricData =
-          lyricSongs
-            .map(convertSong)
-            .filter(Boolean);
-
-        return {
-          isEnd:
-            lyricData.length < 20,
-          data: lyricData,
-        };
-      } catch (e) {
-        console.log(
-          '[网易云] 歌词搜索失败:',
-          e
-        );
-
-        return emptyResult();
-      }
-    }
-
-    return emptyResult();
-  },
-
-  /*
-   * 获取歌曲播放地址
-   */
-  async getMediaSource(
-    musicItem,
-    quality
-  ) {
-    var id =
-      musicItem.neteaseId ||
-      musicItem.id;
-
-    if (!id) {
-      return null;
-    }
-
-    try {
-      var level = 'standard';
-
-      if (quality === 'high') {
-        level = 'higher';
-      }
-
-      if (quality === 'super') {
-        level = 'jyeffect';
-      }
-
-      var response =
-        await axios.get(
-          API + '/song/url/v1',
-          {
-            params: {
-              id: id,
-              level: level,
-            },
-            timeout: 20000,
-          }
-        );
-
-      var result = response.data;
+      var result =
+        response.data;
 
       if (
         !result ||
-        !Array.isArray(result.data) ||
-        !result.data.length
+        !result.result ||
+        !Array.isArray(
+          result.result.songs
+        )
       ) {
-        return null;
+        return emptyResult();
       }
 
-      var item = result.data[0];
+      /*
+       * 转换歌曲。
+       */
+      var songs =
+        result.result.songs
+          .map(convertSong)
+          .filter(Boolean);
 
-      if (!item || !item.url) {
-        return null;
-      }
+      /*
+       * 先去重。
+       */
+      songs =
+        removeDuplicates(songs);
+
+      /*
+       * 再相关性排序。
+       */
+      songs =
+        sortSongs(
+          songs,
+          query
+        );
+
+      /*
+       * 最终只返回前 30 条。
+       */
+      songs =
+        songs.slice(0, 30);
 
       return {
-        url: item.url,
+        isEnd:
+          result.result.songCount
+            ? page * 50 >=
+              result.result.songCount
+            : songs.length < 30,
+
+        data: songs,
       };
-    } catch (e) {
+    } catch (error) {
       console.log(
-        '[网易云] 获取播放地址失败:',
-        e
+        '[网易云] 搜索失败:',
+        error &&
+        error.message
+          ? error.message
+          : error
       );
 
-      return null;
+      return emptyResult();
     }
   },
 
   /*
-   * 获取歌曲详情
+   * 播放地址
    */
-  async getMusicInfo(
+  async getMediaSource(
     musicItem
   ) {
     var id =
@@ -485,34 +448,38 @@ module.exports = {
     try {
       var response =
         await axios.get(
-          API + '/song/detail',
+          API +
+            '/song/url/v1',
           {
             params: {
-              ids: id,
+              id: id,
+              level: 'standard',
             },
+
             timeout: 20000,
           }
         );
 
-      var songs =
+      var data =
         response.data &&
-        response.data.songs;
+        response.data.data;
 
       if (
-        !Array.isArray(songs) ||
-        !songs.length
+        !Array.isArray(data) ||
+        !data.length ||
+        !data[0] ||
+        !data[0].url
       ) {
         return null;
       }
 
-      var song =
-        convertSong(songs[0]);
-
-      return song || null;
-    } catch (e) {
+      return {
+        url: data[0].url,
+      };
+    } catch (error) {
       console.log(
-        '[网易云] 获取歌曲详情失败:',
-        e
+        '[网易云] 播放地址失败:',
+        error
       );
 
       return null;
@@ -520,7 +487,7 @@ module.exports = {
   },
 
   /*
-   * 获取歌词
+   * 歌词
    */
   async getLyric(
     musicItem
@@ -541,160 +508,39 @@ module.exports = {
             params: {
               id: id,
             },
+
             timeout: 20000,
           }
         );
 
-      var result =
+      var data =
         response.data;
 
       if (
-        !result ||
-        !result.lrc ||
-        !result.lrc.lyric
+        !data ||
+        !data.lrc ||
+        !data.lrc.lyric
       ) {
         return null;
       }
 
       return {
         rawLrc:
-          result.lrc.lyric,
+          data.lrc.lyric,
 
         translation:
-          result.tlyric &&
-          result.tlyric.lyric
-            ? result.tlyric.lyric
+          data.tlyric &&
+          data.tlyric.lyric
+            ? data.tlyric.lyric
             : undefined,
       };
-    } catch (e) {
+    } catch (error) {
       console.log(
-        '[网易云] 获取歌词失败:',
-        e
+        '[网易云] 歌词失败:',
+        error
       );
 
       return null;
     }
-  },
-
-  /*
-   * 获取歌单详情
-   */
-  async getMusicSheetInfo(
-    sheetItem,
-    page
-  ) {
-    var id = sheetItem.id;
-
-    if (!id) {
-      return {
-        isEnd: true,
-        musicList: [],
-      };
-    }
-
-    page = page || 1;
-
-    try {
-      var response =
-        await axios.get(
-          API + '/playlist/detail',
-          {
-            params: {
-              id: id,
-            },
-            timeout: 20000,
-          }
-        );
-
-      var playlist =
-        response.data &&
-        response.data.playlist;
-
-      if (!playlist) {
-        return {
-          isEnd: true,
-          musicList: [],
-        };
-      }
-
-      var tracks =
-        Array.isArray(playlist.tracks)
-          ? playlist.tracks
-          : [];
-
-      var musicList =
-        tracks
-          .map(convertSong)
-          .filter(Boolean);
-
-      return {
-        isEnd: true,
-
-        musicList: musicList,
-
-        sheetItem: {
-          title:
-            playlist.name || '',
-          artist:
-            playlist.creator &&
-            playlist.creator.nickname
-              ? playlist.creator.nickname
-              : '',
-          artwork:
-            playlist.coverImgUrl ||
-            '',
-          description:
-            playlist.description ||
-            '',
-        },
-      };
-    } catch (e) {
-      console.log(
-        '[网易云] 获取歌单失败:',
-        e
-      );
-
-      return {
-        isEnd: true,
-        musicList: [],
-      };
-    }
-  },
-
-  /*
-   * 网易云歌单链接导入
-   */
-  async importMusicSheet(
-    urlLike
-  ) {
-    if (!urlLike) {
-      return null;
-    }
-
-    var text = String(urlLike);
-
-    var match =
-      text.match(
-        /[?&]id=(\d+)/
-      );
-
-    if (!match) {
-      match =
-        text.match(
-          /playlist[\/#](\d+)/
-        );
-    }
-
-    if (!match) {
-      throw new Error(
-        '无法识别网易云歌单链接'
-      );
-    }
-
-    return {
-      id: match[1],
-      platform: PLATFORM,
-      title: '网易云歌单',
-    };
   },
 };
